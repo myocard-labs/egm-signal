@@ -7,9 +7,6 @@ from collections.abc import Callable
 import numpy as np
 import pytest
 
-# SyntheticRecord type-hint only; the conftest factory builds them.
-from tests.conftest import SyntheticRecord
-
 from myocard_egm_signal.calibration import (
     Calibration,
     CalibrationStrategy,
@@ -17,6 +14,9 @@ from myocard_egm_signal.calibration import (
     compute_calibration,
     estimate_qrs_peak_to_peak,
 )
+
+# SyntheticRecord type-hint only; the conftest factory builds them.
+from tests.conftest import SyntheticRecord
 
 
 def test_estimate_qrs_peak_to_peak_returns_lead_pp_count(
