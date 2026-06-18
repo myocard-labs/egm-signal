@@ -1,16 +1,22 @@
 # ---------------------------------------------------------------------------
-# pyproject.toml — myocard-labs python template
+# pyproject.toml — myocard-egm-signal
 #
-# Find/replace before publishing:
-#   myocard-package-name   → PyPI distribution name (dash-separated, with myocard- prefix)
-#   myocard_package_name   → Python import name (underscore-separated)
-#   PACKAGE_DESCRIPTION    → one-line summary used by PyPI
-#   GITHUB_REPO_NAME       → bare repo name (no myocard- prefix)
+# Generic signal-processing primitives for intracardiac EGM data: filters
+# (band-pass), windowing math (sliding peak-to-peak), threshold strategies
+# (healthy / quiet, plus the Protocols defining the interface), calibration
+# (Calibration dataclass + CalibrationStrategy Protocol + R-wave anchoring),
+# and Record-Protocol-driven extractors (extract_healthy_segments,
+# extract_noise_segments).
 #
-# Convention recap (LOCKED-IN 2026-06-13, see intracardiac-platform/project/refactor_checklist.md):
-#   GitHub repo  : egm-contracts                  (bare)
-#   PyPI dist    : myocard-egm-contracts          (myocard- prefix)
-#   Import name  : myocard_egm_contracts          (underscore)
+# No internal dependencies. Pure numpy + scipy. Consumed by:
+#   - iafdb-pipeline                (concrete IAFDBRecord satisfies the Protocol)
+#   - synthetic-egm-pipeline         (mixer uses bandpass, noise side uses extractors)
+#   - egm-features                   (may call bandpass before feature extraction)
+#
+# Convention recap:
+#   GitHub repo  : egm-signal                     (bare)
+#   PyPI dist    : myocard-egm-signal             (myocard- prefix)
+#   Import name  : myocard_egm_signal             (underscore)
 # ---------------------------------------------------------------------------
 
 [build-system]
@@ -18,16 +24,24 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
-name = "myocard-package-name"
+name = "myocard-egm-signal"
 version = "0.1.0"
-description = "PACKAGE_DESCRIPTION"
+description = "Generic signal-processing primitives for intracardiac EGM data: filters, windowing, threshold strategies, calibration, and Record-Protocol-driven segment extractors."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 authors = [
   { name = "Daniel Klein", email = "daniel.anthony.klein.88@gmail.com" },
 ]
-keywords = ["cardiac", "electrophysiology", "signal-processing", "egm"]
+keywords = [
+  "cardiac",
+  "electrophysiology",
+  "signal-processing",
+  "egm",
+  "intracardiac",
+  "filters",
+  "calibration",
+]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
@@ -41,38 +55,43 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Medical Science Apps.",
 ]
 
+# Runtime deps. Deliberately tiny — no internal sibling repos. Anyone
+# who wants to bandpass an EGM in a notebook pays only for numpy + scipy.
 dependencies = [
-  # Runtime deps go here. Keep this lean. Common floor: numpy + h5py.
-  # "numpy>=1.26",
-  # "h5py>=3.10",
+  "numpy>=1.26",
+  "scipy>=1.10",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0",
   "pytest-cov>=5.0",
-  "ruff>=0.6.0",
-  "mypy>=1.10",
+  # ruff and mypy pinned to exact versions matching the rest of the
+  # myocard-labs stack so local dev, CI, and the pre-commit hook all
+  # run the same binary and format/typecheck identically.
+  "ruff==0.15.17",
+  "mypy==2.1.0",
   "pre-commit>=3.7",
   "nbstripout>=0.7",
 ]
 
 [project.urls]
-Homepage      = "https://github.com/myocard-labs/GITHUB_REPO_NAME"
-Repository    = "https://github.com/myocard-labs/GITHUB_REPO_NAME"
-Issues        = "https://github.com/myocard-labs/GITHUB_REPO_NAME/issues"
+Homepage      = "https://github.com/myocard-labs/egm-signal"
+Repository    = "https://github.com/myocard-labs/egm-signal"
+Issues        = "https://github.com/myocard-labs/egm-signal/issues"
 Organization  = "https://github.com/myocard-labs"
-
-# Optional CLI entry points — uncomment + edit when the package ships commands.
-# [project.scripts]
-# myocard-foo = "myocard_package_name.cli:main"
 
 # ---------------------------------------------------------------------------
 # Hatch
 # ---------------------------------------------------------------------------
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/myocard_package_name"]
+packages = ["src/myocard_egm_signal"]
+# Ship py.typed so downstream consumers (and CI mypy) can type-check
+# imports from this package without an ignore-missing-imports override.
+artifacts = [
+  "src/myocard_egm_signal/py.typed",
+]
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -113,6 +132,9 @@ ignore = [
 "tests/**/*.py" = ["B011"]
 "__init__.py"   = ["F401"]
 
+[tool.ruff.lint.isort]
+known-first-party = ["myocard_egm_signal"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
@@ -132,12 +154,10 @@ addopts = [
 ]
 filterwarnings = [
   "error",
-  # Add per-package allowlist below as needed, e.g.:
-  # "ignore::DeprecationWarning:some_third_party_lib",
 ]
 
 [tool.coverage.run]
-source = ["src/myocard_package_name"]
+source = ["src/myocard_egm_signal"]
 branch = true
 
 [tool.coverage.report]
@@ -163,15 +183,8 @@ no_implicit_optional = true
 show_error_codes = true
 files = ["src", "tests"]
 
-# Per-module overrides for libraries without type stubs.
-# Uncomment + edit when the package starts importing one of these.
-# Listing them here when the imports aren't present triggers
-# `warn_unused_configs` and clutters the mypy output.
-#
-# [[tool.mypy.overrides]]
-# module = [
-#   "h5py.*",
-#   "scipy.*",
-#   "matplotlib.*",
-# ]
-# ignore_missing_imports = true
+# scipy ships without complete inline stubs; ignore-missing silences
+# the dance without losing strict checking on our own code.
+[[tool.mypy.overrides]]
+module = ["scipy.*"]
+ignore_missing_imports = true
