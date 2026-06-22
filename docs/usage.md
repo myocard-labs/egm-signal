@@ -147,6 +147,35 @@ segs = extract_healthy_segments(
 
 The noise-side analog satisfies `NoiseSegmentStrategy` with the same signature — same Protocol shape, distinct name to make the direction visible at call sites.
 
+### Calibrate classifier probabilities (temperature scaling)
+
+Distinct from R-wave anchoring (which calibrates raw EGM amplitudes against a reference). Temperature scaling calibrates the *output probabilities* of a trained classifier — useful after training so that "the model says P = 0.8" really means "this case will land in the positive class ~80% of the time" (Guo et al. 2017, *On Calibration of Modern Neural Networks*).
+
+```python
+import numpy as np
+from myocard_egm_signal import apply_temperature, fit_temperature
+
+# logits: pre-sigmoid model output for a labeled calibration set.
+# labels: ground-truth 0/1 for the same samples.
+logits = np.array([2.4, -3.1, 5.0, -0.2, 1.8, -2.7])
+labels = np.array([1, 0, 1, 0, 1, 0])
+
+T = fit_temperature(logits, labels)
+print(f"fitted T = {T:.3f}")
+# T > 1: model is overconfident, calibration softens predictions.
+# T < 1: model is underconfident, calibration sharpens predictions.
+# T = 1: no change.
+
+# Apply T to any logits — same model, same T — to get calibrated logits.
+# Take sigmoid downstream when you actually need probabilities.
+calibrated_logits = apply_temperature(logits, T)
+calibrated_probs = 1.0 / (1.0 + np.exp(-calibrated_logits))
+```
+
+Temperature scaling is monotonic in logits, so AUROC, accuracy at threshold 0.5, and any other rank-based metric are unchanged after calibration. ECE, the reliability diagram, and threshold-tuned decisions (e.g. ablation-flagging at `P > 0.7`) do shift.
+
+This module ships only the math — pure numpy/scipy, no torch, no I/O. The consumer (the eval CLI, the viewer's analysis tab, paper-figure notebooks, the C++ deployment runtime) decides where to fit `T` from, what to do with the fitted value, and when to apply it.
+
 ### Define your own Record (write a new producer)
 
 Any object with `name`, `patient`, `fs`, `signal`, `channel_names`, and a `channel_index(name)` method satisfies the Record Protocol. The simplest implementation is a frozen dataclass:
@@ -182,8 +211,9 @@ If your producer doesn't have QRS annotations, use a different calibration strat
 | `myocard_egm_signal.filters` | `bandpass` (zero-phase Butterworth). Subpackage; future: notch, smoothing. |
 | `myocard_egm_signal.windowing` | `sliding_window_peak_to_peak` and future sliding-window primitives. |
 | `myocard_egm_signal.thresholds` | Keep-above (`ThresholdStrategy` + Absolute/Percentile/None) and keep-below (`NoiseSegmentStrategy` + AbsoluteQuiet/PercentileQuiet) strategy hierarchies. |
-| `myocard_egm_signal.calibration` | `Calibration` + `CalibrationStrategy` + `RWaveAnchoring` + `compute_calibration` + `estimate_qrs_peak_to_peak`. |
+| `myocard_egm_signal.calibration` | Signal-amplitude calibration: `Calibration` + `CalibrationStrategy` + `RWaveAnchoring` + `compute_calibration` + `estimate_qrs_peak_to_peak`. Calibrates raw EGM signals against a QRS-derived reference. |
 | `myocard_egm_signal.extraction` | `HealthySegment` + `NoiseSegment` + `extract_healthy_segments` + `extract_noise_segments` + `DEFAULT_BIPOLAR_BAND_HZ`. |
+| `myocard_egm_signal.model` | ML model pre/post-processing math. Today: `fit_temperature` + `apply_temperature` + `DEFAULT_TEMPERATURE_BOUNDS` for probability calibration (temperature scaling). Future: Platt scaling, isotonic regression, multi-class softmax calibration. |
 
 Everything in `__all__` is also re-exported from the top-level `myocard_egm_signal` for convenience — most callers will write `from myocard_egm_signal import bandpass` rather than reach into a submodule.
 
