@@ -30,16 +30,28 @@ why.
                 │   (this repo)         │       pure numpy + scipy     │
                 └──────────────────────┘                                │
                                                                         │
-                            (egm-classifier sits above egm-data, not   ┘
-                             above egm-signal — it consumes
-                             ClassifierBank, not raw signals)
+                            (egm-classifier consumes ClassifierBank      ┘
+                             from egm-data, not raw signals — but
+                             starting with the model/ subpackage,
+                             egm-classifier and downstream analysis
+                             tools also import from egm-signal for
+                             ML pre/post-processing math)
 ```
 
-Three consumers all share one implementation of bandpass, sliding-window
-peak-to-peak, threshold strategies, and the calibration scaffolding. The
-legacy `synthetic-egm-pipeline` had inlined copies of `_bandpass` in two
-places with a docstring explicitly saying "matches iafdb-pipeline's
+Three signal-side consumers share one implementation of bandpass,
+sliding-window peak-to-peak, threshold strategies, and the
+signal-amplitude calibration scaffolding. The legacy
+`synthetic-egm-pipeline` had inlined copies of `_bandpass` in two places
+with a docstring explicitly saying "matches iafdb-pipeline's
 filters.bandpass" — that smell is what this package exists to resolve.
+
+A fourth consumer family — `egm-classifier`'s export CLI, the
+`egm-viewer` analysis tab, paper-figure notebooks — pulls in the
+ML-side primitives in `model/` (temperature scaling today, more
+classifier-output utilities later). These never look at raw EGM
+signals; they operate on classifier logits/probabilities. Keeping
+both sides in egm-signal avoids a separate "ML utilities" package
+for what's currently a small surface.
 
 ## Folder layout
 
@@ -51,7 +63,7 @@ src/myocard_egm_signal/
 ├── records.py             ← Record Protocol; ~1 class, unlikely to grow
 ├── windowing.py           ← grows to sliding_window_rms etc. later
 ├── filters/               ← grows to notch, smoothing, decimation
-├── calibration/           ← grows to new strategies
+├── calibration/           ← signal-amplitude calibration; grows to new strategies
 │   ├── base.py            ← Calibration + CalibrationStrategy Protocol
 │   ├── qrs_estimation.py  ← estimate_qrs_peak_to_peak helper
 │   ├── r_wave_anchoring.py
@@ -60,9 +72,11 @@ src/myocard_egm_signal/
 │   ├── base.py            ← Both Protocols
 │   ├── healthy.py         ← Absolute + Percentile + NoThreshold
 │   └── noise.py           ← AbsoluteQuiet + PercentileQuiet
-└── extraction/            ← grows to future extractors
-    ├── segments.py        ← HealthySegment + NoiseSegment dataclasses
-    └── extractors.py      ← The two functions
+├── extraction/            ← grows to future extractors
+│   ├── segments.py        ← HealthySegment + NoiseSegment dataclasses
+│   └── extractors.py      ← The two functions
+└── model/                 ← ML model pre/post-processing math
+    └── temperature_scaling.py   ← fit_temperature + apply_temperature
 ```
 
 Each subpackage `__init__.py` re-exports its public names so consumers
@@ -196,6 +210,33 @@ preferable to fail closed.
 not be used on the noise side — the docstring warns about this. There
 is no `NoQuietThreshold` to enforce the rule with the type system.
 
+## Why two subpackages with "calibration" in their description
+
+Two distinct concepts unfortunately share the English word "calibration":
+
+- **`calibration/`** — *signal-amplitude* calibration. Solves for the
+  scalar that brings a raw EGM record's QRS peak-to-peak to a chosen
+  reference (R-wave anchoring against surface ECG leads). Inputs:
+  multi-channel signals + QRS sample indices. Outputs: a
+  `Calibration` object whose `.scalar` multiplies the signal.
+- **`model/`** — *probability* calibration (today: temperature
+  scaling). Solves for the scalar that makes a trained classifier's
+  predicted probabilities match empirical class frequencies. Inputs:
+  pre-sigmoid logits + binary labels. Outputs: a fitted `T` and an
+  apply step that divides logits by it.
+
+The two are unrelated and combining them under one folder would
+overload the namespace. We keep them as separate subpackages and use
+explicit names everywhere (`compute_calibration` for signal-amplitude,
+`fit_temperature` for probability) so the call site disambiguates
+which "calibration" is being performed.
+
+Future additions follow the same split: signal-side calibration
+strategies (percentile-based, fixed-gain, manual) drop into
+`calibration/`; classifier-output calibration strategies (Platt
+scaling, isotonic regression, multi-class softmax variants) drop
+into `model/`.
+
 ## How a new producer pulls this in
 
 Concretely, in `iafdb-pipeline`'s `bank_export.py`:
@@ -222,3 +263,23 @@ The producer keeps its dataset-specific knowledge (the bipolar
 channel set, the PhysioNet download, the record loader) and pulls in
 the generic primitives via imports. No producer keeps a copy of
 `bandpass` anymore.
+
+## How an ML-side consumer pulls this in
+
+Concretely, in `egm-classifier`'s export CLI (a future PR):
+
+```python
+from myocard_egm_signal import apply_temperature, fit_temperature
+
+# Pulled from the eval pipeline: per-trace logits + ground-truth labels.
+T = fit_temperature(eval_logits, eval_labels)
+
+# Either bake T into the ONNX graph at export time, or persist T in
+# egm_class_model_metadata.json so the deployment runtime applies it.
+calibrated_logits = apply_temperature(eval_logits, T)
+```
+
+Same import shape as the signal-side consumers; same "egm-signal is
+where polyrepo-shared pure functions live" principle. The classifier
+keeps its model-specific knowledge (architecture, training loop, ONNX
+exporter) and pulls in the math via imports.

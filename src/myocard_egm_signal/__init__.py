@@ -16,13 +16,18 @@ Public surface (re-exported for ergonomic import):
   :class:`PercentileQuietThreshold` — keep-below selection.
 - :class:`Calibration` + :class:`CalibrationStrategy` +
   :class:`RWaveAnchoring` + :func:`compute_calibration` +
-  :func:`estimate_qrs_peak_to_peak` — amplitude calibration.
+  :func:`estimate_qrs_peak_to_peak` — signal-amplitude calibration
+  (R-wave anchoring against IAFDB recordings).
 - :class:`HealthySegment` + :class:`NoiseSegment` +
   :func:`extract_healthy_segments` + :func:`extract_noise_segments` +
   :data:`DEFAULT_BIPOLAR_BAND_HZ` — record-Protocol-driven extractors.
+- :func:`fit_temperature` + :func:`apply_temperature` +
+  :data:`DEFAULT_TEMPERATURE_BOUNDS` — probability calibration
+  (temperature scaling) for ML model outputs.
 
 Subpackage layout (light grouping per project/architecture.md):
-``filters/``, ``calibration/``, ``thresholds/``, ``extraction/`` are
+``filters/``, ``calibration/`` (signal-amplitude), ``thresholds/``,
+``extraction/``, and ``model/`` (ML pre/post-processing math) are
 folders that group multiple files or are likely to grow; ``records``
 and ``windowing`` stay flat as single-module domains.
 """
@@ -48,6 +53,11 @@ from .extraction import (
     extract_noise_segments,
 )
 from .filters import bandpass
+from .model import (
+    DEFAULT_TEMPERATURE_BOUNDS,
+    apply_temperature,
+    fit_temperature,
+)
 from .records import Record
 from .thresholds import (
     AbsoluteQuietThreshold,
@@ -70,6 +80,7 @@ __all__ = [
     "DEFAULT_BIPOLAR_BAND_HZ",
     "DEFAULT_PREFERRED_LEADS",
     "DEFAULT_TARGET_QRS_PP_MV",
+    "DEFAULT_TEMPERATURE_BOUNDS",
     "AbsoluteQuietThreshold",
     "AbsoluteThreshold",
     "Calibration",
@@ -84,10 +95,12 @@ __all__ = [
     "Record",
     "ThresholdStrategy",
     "__version__",
+    "apply_temperature",
     "bandpass",
     "compute_calibration",
     "estimate_qrs_peak_to_peak",
     "extract_healthy_segments",
     "extract_noise_segments",
+    "fit_temperature",
     "sliding_window_peak_to_peak",
 ]
