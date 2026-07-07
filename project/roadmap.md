@@ -23,8 +23,11 @@ Scope (recap, see `architecture.md` for the design rationale):
 
 ## v0.2.0+ — concrete next steps
 
-These are sized for "could land in one focused PR each." Order is
-suggestive; pick by which producer needs it first.
+These are sized for "could land in one focused PR each." Items
+scheduled into cross-cutting Phase work in the meta repo's
+`project_plan.md` carry a `→ tracked at intracardiac-platform Phase X`
+annotation; the rest are component-internal — add when a consumer
+needs them.
 
 ### Additional filters
 
@@ -41,6 +44,7 @@ suggestive; pick by which producer needs it first.
   pipeline today simulates at higher rates than the classifier
   consumes; a decimation primitive here avoids a duplicate
   implementation.
+  > → Tracked at `intracardiac-platform/project/project_plan.md` Phase 1.5. Pairs with egm-classifier's run.json export-config refactor.
 
 ### Additional window primitives
 
@@ -51,6 +55,7 @@ suggestive; pick by which producer needs it first.
 - **`windowing.sliding_window_dominant_frequency`** — short-window
   spectral peak. Borders on feature-engineering (which is
   egm-features's job) but is useful for online filtering.
+  > → Tracked at `intracardiac-platform/project/refactor_checklist.md` Phase 4 (egm-features). Likely belongs there rather than here; resolve during the egm-features scaffolding pass + the cross-project code placement audit.
 
 ### Additional calibration strategies
 
@@ -75,9 +80,10 @@ suggestive; pick by which producer needs it first.
 - **`extraction.activation_based`** — segment around detected
   activations rather than at fixed sliding-window stride. The current
   fixed-window approach misses sub-window-scale activation alignment.
+  > → Tracked at `intracardiac-platform/project/project_plan.md` Phase 1.5. Enables proper segment-around-activation extraction for the activation-anchoring investigation.
 - **`extraction.multi_beat`** — segment N consecutive beats per
-  extraction unit. Needed for the egm-classifier Phase 2 multi-beat
-  steady-state pacing work.
+  extraction unit. Needed for the multi-beat sequence classification work.
+  > → Tracked at `intracardiac-platform/project/project_plan.md` Phase 4 (multi-beat sequence classification). Note: the original wording said "egm-classifier Phase 2" using the synthetic-side phase numbering that's been retired; the actual home is project_plan Phase 4 per [[reference-multi-beat-consensus]].
 
 ### Per-channel calibration
 
