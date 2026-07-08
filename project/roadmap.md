@@ -1,134 +1,79 @@
 # egm-signal — roadmap
 
-What's planned for future releases. Internal doc — public users see the
-README and `docs/usage.md`.
+Future work only — shipped history lives in [`CHANGELOG.md`](../CHANGELOG.md). Internal
+doc; public users read the README + `docs/usage.md`.
 
-## v0.1.0 — initial release (shipped)
+Work lands here as it's identified, sits in the **Backlog** until a phase-planning session
+promotes it into a **Phase** cluster, then moves to the CHANGELOG once shipped. Phase
+clusters mirror the science Project Phases in
+`intracardiac-platform/project/project_plan.md`. Items scheduled into cross-cutting Phase
+work carry a `→ tracked at intracardiac-platform Phase X` annotation; the rest are
+component-internal — add when a consumer needs them.
 
-Scope (recap, see `architecture.md` for the design rationale):
+## Phase 1.5 — sim-realism
 
-- `Record` Protocol.
-- `bandpass` (zero-phase Butterworth, axis-0).
-- `sliding_window_peak_to_peak`.
-- `ThresholdStrategy` + `NoiseSegmentStrategy` Protocols.
-- `AbsoluteThreshold`, `PercentileThreshold`, `NoThreshold`.
-- `AbsoluteQuietThreshold`, `PercentileQuietThreshold`.
-- `Calibration` + `CalibrationStrategy` Protocol + `RWaveAnchoring`
-  (with `preferred_leads` kwarg) + `compute_calibration` +
-  `estimate_qrs_peak_to_peak`.
-- `HealthySegment` + `NoiseSegment` + `extract_healthy_segments` +
-  `extract_noise_segments`.
-- 48 unit tests against synthetic signals with known peak-to-peak
-  amplitudes and known QRS positions.
+- **`filters.decimation`** — anti-alias + downsample. The synthetic pipeline simulates at
+  higher rates than the classifier consumes; a decimation primitive here avoids a duplicate
+  implementation. Pairs with egm-classifier's `run.json` export-config refactor.
+- **`extraction.activation_based`** — segment around detected activations rather than at a
+  fixed sliding-window stride (the current fixed window misses sub-window activation
+  alignment). Enables proper segment-around-activation extraction for the
+  activation-anchoring investigation.
 
-## v0.2.0+ — concrete next steps
+> → Tracked at `intracardiac-platform/project/project_plan.md` Phase 1.5.
 
-These are sized for "could land in one focused PR each." Items
-scheduled into cross-cutting Phase work in the meta repo's
-`project_plan.md` carry a `→ tracked at intracardiac-platform Phase X`
-annotation; the rest are component-internal — add when a consumer
-needs them.
+## Phase 4 — multi-beat
 
-### Additional filters
+- **`extraction.multi_beat`** — segment N consecutive beats per extraction unit; needed for
+  multi-beat sequence classification. The first Protocol-signature *major* bump likely lands
+  here ("multi-beat extraction needs more from `Record`").
 
-- **`filters.notch`** — single-frequency notch (50/60 Hz powerline
-  rejection). Producers today rely on the band-pass to attenuate
-  powerline; that works because 50/60 Hz is below the 30 Hz lower
-  cutoff, but a dedicated notch is cleaner and lets the band-pass
-  start lower (e.g. 10 Hz for atrial activation studies).
-- **`filters.smoothing`** — Savitzky-Golay or moving-average for
-  baseline-wander removal. Currently producers just trust the
-  band-pass; explicit smoothing helps with high-amplitude artifact
-  rejection upstream of threshold selection.
-- **`filters.decimation`** — anti-alias + downsample. The synthetic
-  pipeline today simulates at higher rates than the classifier
-  consumes; a decimation primitive here avoids a duplicate
-  implementation.
-  > → Tracked at `intracardiac-platform/project/project_plan.md` Phase 1.5. Pairs with egm-classifier's run.json export-config refactor.
+> → Tracked at `intracardiac-platform/project/project_plan.md` Phase 4 (multi-beat
+> sequence classification), per [[reference-multi-beat-consensus]].
 
-### Additional window primitives
+## Backlog (unscheduled — promoted into a phase at a planning session)
 
-- **`windowing.sliding_window_rms`** — for energy-based thresholding,
-  which some literature uses instead of peak-to-peak.
-- **`windowing.sliding_window_zero_crossings`** — for activation
-  detection without amplitude calibration.
-- **`windowing.sliding_window_dominant_frequency`** — short-window
-  spectral peak. Borders on feature-engineering (which is
-  egm-features's job) but is useful for online filtering.
-  > → Tracked at `intracardiac-platform/project/refactor_checklist.md` Phase 4 (egm-features). Likely belongs there rather than here; resolve during the egm-features scaffolding pass + the cross-project code placement audit.
+Each sized for "one focused PR"; add when a consumer needs it.
 
-### Additional calibration strategies
+- **Additional filters** — `filters.notch` (50/60 Hz powerline rejection; lets the band-pass
+  start lower, e.g. 10 Hz for atrial-activation studies) and `filters.smoothing`
+  (Savitzky-Golay / moving-average for baseline-wander removal upstream of threshold
+  selection).
+- **Additional window primitives** — `sliding_window_rms` (energy-based thresholding) and
+  `sliding_window_zero_crossings` (amplitude-free activation detection).
+  (`sliding_window_dominant_frequency` borders on feature engineering — likely belongs in
+  egm-features, not here.)
+- **Additional calibration strategies** — `percentile_calibration` (match a percentile of
+  the intracardiac p-p distribution to a target; no surface ECG needed), `fixed_gain` (ADC
+  gain from the file header), and `manual` (caller-supplied scalar).
+- **Additional threshold strategies** — `RelativeVoltageIndex` (`mean + k·std` of the pooled
+  distribution) and `MaxPercentile` (per-channel percentile then max-across-channels, less
+  sensitive to one noisy channel).
+- **Per-channel calibration** — today `Calibration` is one scalar per record; some datasets
+  need per-channel scaling (`Calibration.scalar → float | dict[str, float]`, or a parallel
+  `Calibration.per_channel` map).
 
-- **`calibration.percentile_calibration`** — calibrate so a chosen
-  percentile of the *intracardiac* p-p distribution matches a target.
-  Useful when no surface ECG is available.
-- **`calibration.fixed_gain`** — pull the ADC gain from the file
-  header. Cleanest for datasets that calibrate at acquisition time.
-- **`calibration.manual`** — caller-supplied scalar. For one-off
-  diagnostic work or when the calibration is computed externally.
+## Known issues
 
-### Additional threshold strategies
-
-- **`thresholds.healthy.RelativeVoltageIndex`** — `mean + k * std` of
-  the pooled distribution. Common in the morphology literature.
-- **`thresholds.healthy.MaxPercentile`** — per-channel percentile
-  followed by a max across channels (rather than the current pooled
-  percentile). Less sensitive to one noisy channel.
-
-### Extractor variants
-
-- **`extraction.activation_based`** — segment around detected
-  activations rather than at fixed sliding-window stride. The current
-  fixed-window approach misses sub-window-scale activation alignment.
-  > → Tracked at `intracardiac-platform/project/project_plan.md` Phase 1.5. Enables proper segment-around-activation extraction for the activation-anchoring investigation.
-- **`extraction.multi_beat`** — segment N consecutive beats per
-  extraction unit. Needed for the multi-beat sequence classification work.
-  > → Tracked at `intracardiac-platform/project/project_plan.md` Phase 4 (multi-beat sequence classification). Note: the original wording said "egm-classifier Phase 2" using the synthetic-side phase numbering that's been retired; the actual home is project_plan Phase 4 per [[reference-multi-beat-consensus]].
-
-### Per-channel calibration
-
-The current `Calibration` is a single scalar per record. Some
-datasets need per-channel scaling (different bipolar pairs have
-different effective gains). The model change: `Calibration.scalar`
-becomes `float | dict[str, float]`, or a parallel
-`Calibration.per_channel: dict[str, float]` ships beside `scalar`.
-
-### Versioning + py.typed
-
-- Already shipping `py.typed` in v0.1.0.
-- Treat each minor bump as additive (new strategies, new helpers).
-- Treat each major bump as a Protocol signature change. The first such
-  change will be needed when one of the deferred items above
-  requires it — likely "multi-beat extraction needs more from Record."
-
-## Won't-do (out of scope, but documented to save the question)
-
-- **No on-disk format ownership.** Producers serialize via
-  `myocard-egm-data`; egm-signal stays in-memory only.
-- **No CLI.** This is a library. The producers that consume it have
-  CLIs.
-- **No feature engineering.** Zero-crossings as a windowing primitive
-  is reasonable; computing spectral entropy as a per-trace feature
-  belongs in egm-features.
-- **No model code.** No torch dependency, no nn.Module. Stays at the
-  numpy + scipy level.
+None open.
 
 ## Open architectural questions for later
 
-These don't need decisions for v0.1.0 but are worth thinking about
-when the second or third consumer arrives:
+Worth thinking about as the second/third consumer arrives; no decision needed yet:
 
-- **Should the Record Protocol carry a `dtype` attribute?** Today
-  everything is implicit float64 → float32 in the producer's writer.
-  A Protocol-level dtype would let calibration math respect the input
-  precision.
-- **Should there be a `MultiSegmentRecord` Protocol** for sources that
-  expose multiple recording sessions per patient? Today the record
-  is one continuous signal; multi-segment would need either splitting
-  upstream or a richer Protocol here.
-- **Per-call vs per-strategy `band_hz`?** Currently the extractors
-  take `band_hz` as a kwarg with a clinical default. The bandpass is
-  shared across both extractors and the synthetic mixer; centralizing
-  the default (a module-level `CLINICAL_BIPOLAR_BAND_HZ` constant
-  importable from the top level) would reduce repeat-default-typing
-  in the producers.
+- **A `dtype` attribute on the `Record` Protocol** so calibration math respects input
+  precision (today: implicit float64 → float32 in the producer's writer).
+- **A `MultiSegmentRecord` Protocol** for sources exposing multiple recording sessions per
+  patient (today the record is one continuous signal).
+- **Per-call vs per-strategy `band_hz`** — centralize the clinical default in a module-level
+  `CLINICAL_BIPOLAR_BAND_HZ` constant importable from the top level, to reduce
+  repeat-default-typing in the producers.
+
+## Won't-do (out of scope, but documented to save the question)
+
+- **No on-disk format ownership.** Producers serialize via `myocard-egm-data`; egm-signal
+  stays in-memory only.
+- **No CLI.** This is a library; the producers that consume it have CLIs.
+- **No feature engineering.** Zero-crossings as a windowing primitive is reasonable;
+  computing spectral entropy as a per-trace feature belongs in egm-features.
+- **No model code.** No torch dependency, no `nn.Module` — stays at the numpy + scipy level.
