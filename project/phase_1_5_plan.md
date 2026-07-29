@@ -1,0 +1,386 @@
+# egm-signal — Phase 1.5 implementation plan
+
+**Repo:** egm-signal · **Phase:** 1.5
+**Phase design doc:** `intracardiac-platform/phases/phase_1_5/design.md`
+**Status:** planning · **Progress:** 0/11 steps done
+**Repo estimate:** **10–21 h active** (SIG1, incl. the `docs/theory.md` graduation) · **+0.5–1 h**
+(QRS-default removal) · **+0.5–1.5 h** if B9 is promoted from backlog.
+Cold-start estimate by analogy — `estimation_ledger.csv` is empty, so there is no rate to multiply
+by yet. Ranges are deliberately wide.
+
+**Wave placement:** SIG1 touches no schema and this repo has no sibling deps, so it is **not** in the
+Wave-1 re-pin cascade and runs **parallel to Wave 1** (project-lead ruling, 2026-07-28). Study §8.1
+needs the detector, so this work is on the phase's early critical path.
+
+---
+
+## Scope — what this plan covers
+
+| Phase item | What it needs from this repo | Steps |
+|---|---|---|
+| **SIG1** | `extraction.activation_based` — detection function `g` (rectified `dV/dt` · Teager–Kaiser · Botteron envelope), adaptive-threshold + refractory-NMS train detection, envelope onset/offset, **the shared anchor-window helper** (`window_from_anchor`) + the **boundary + multi-beat predicates**; plus **`docs/theory.md`**, the repo's canonical math home (project-lead, 2026-07-28) | S1–S7a, S9 |
+| **B9** *(conditional)* | `filters.decimation` — anti-alias + downsample. **Only if** the §8.1 `T`/rate decision needs resampling; otherwise stays in `roadmap.md`. | S8 |
+| **B22** | **QRS-calibration default removal** — delete `DEFAULT_TARGET_QRS_PP_MV`, make the argument required, leaving iafdb-pipeline's CLI config the single source. Resolves the two-layer default split iafdb-pipeline documents in its `docs/theory.md`. Arrived via the iafdb-pipeline chat; value ruled by research, structural fix ruled by Daniel 2026-07-28; id assigned by the project-lead in CL-024 §5a (design §4). **Breaking → ships alone as v0.3.0.** | S0 |
+
+Consumers: **SEP2** (synthetic-egm-pipeline) and **IAF1** (iafdb-pipeline) both depend on SIG1 and
+own only their *response* — SEP2 sizes the sim so the crop never overhangs; IAF1 drops boundary +
+multi-beat windows and may stride. Neither re-implements the crop math.
+
+Math reference: `intracardiac-platform/project/investigations/activation_splitting_method.md`.
+
+## Design notes
+
+Local decisions taken before coding. Anything long-lived is folded into `project/architecture.md` at
+S9.
+
+- **Subpackage, not a single module.** §3 names the module `extraction.activation_based`; it lands as
+  a **subpackage** `extraction/activation_based/` because it carries four separable concerns
+  (detection functions, train detection, complex bounds, anchor windowing) and one flat module would
+  run past 400 lines — well beyond this repo's largest file (209). This follows the architecture doc's
+  "a folder per domain that … is clearly going to grow." Public names re-export up through
+  `extraction/__init__.py` and the top-level `__init__.py`, so consumers still write
+  `from myocard_egm_signal import detect_activation_train`.
+
+- **Detection functions are a strategy family, not a `method=` string.** The three options carry
+  different parameters (Botteron needs a band + a low-pass cutoff; the other two are parameterless),
+  so they follow the repo's established Protocol + concrete-strategy pattern (`CalibrationStrategy` /
+  `ThresholdStrategy`) rather than egm-features' `method=` literal. A parameterless string argument
+  would have nowhere to put the Botteron cutoffs.
+
+- **The detection threshold is a third threshold hierarchy.** `τ_det` is a threshold on the detection
+  function `g`, not on pooled peak-to-peak, so it gets its own Protocol
+  (`DetectionThresholdStrategy`, `compute_threshold(detection_function) -> float`) in
+  `thresholds/detection.py` alongside the existing keep-above / keep-below pair. Same reasoning the
+  architecture doc already gives for keeping two hierarchies: **the type signature communicates which
+  array you're allowed to hand it**, and mypy refuses a `PercentileThreshold` where a detection
+  threshold belongs.
+
+- **Fail closed on a degenerate detection function.** A flat or constant channel gives
+  `MAD(g) = 0`, which would make `τ_det = c·median(g)` admit every sample as an activation. Following
+  the repo's empty-pool sentinel convention, `MedianMadThreshold` returns `+inf` when the MAD is zero
+  — detect nothing rather than detect everything.
+
+- **`AnchoredWindow` reports the *realized* position.** After `s = round(t_a − p(T−1))` the actual
+  fractional position is `(t_a − s)/(T−1)`, which differs from the requested `p` by up to half a
+  sample. The result dataclass carries both, so SEP2 and IAF1 can report the position statistic they
+  actually produced — that statistic is what STU5/STU4 compare, and it is exactly the drift this
+  helper exists to prevent.
+
+- **Bounds checking is the caller's move.** `window_from_anchor` raises on an out-of-range crop rather
+  than returning `None`; callers test `window_is_within_bounds` first. This keeps the return type
+  clean and matches the two consumers' actual behavior — SEP2 guarantees the crop fits by sizing the
+  sim, IAF1 tests and drops.
+
+- **Plain frozen dataclasses, not egm-contracts models** — preempting the pr_checklist §2 line
+  "cross-module handoffs use typed egm-contracts models." That rule governs handoffs of *persisted,
+  cross-repo data formats*; egm-signal sits **below** contracts by charter (no `myocard-*` sibling
+  deps at all), and `AnchoredWindow` / `ActivationComplex` are in-memory DSP results, not artifacts.
+  Same precedent the repo already set with `HealthySegment`, `NoiseSegment`, and `Calibration`. Noted
+  here so the placement audit doesn't re-open it at PR time.
+
+- **~~No `docs/theory.md` in this repo~~ — reversed 2026-07-28 by the project-lead.** My first draft
+  argued the platform method spec should stay the single source and that mirroring it here would
+  drift. The project-lead overruled on the ownership rule: *the repo that owns a primitive owns its
+  math theory*, and SIG1's primitives have **two** consumers (SEP2, IAF1), so the shared math cannot
+  live in either consumer's doc. The resolution avoids the drift I was worried about — this is a
+  **graduation, not a mirror**: the as-built derivations move out of
+  `activation_splitting_method.md` into `docs/theory.md`, and the investigation stays behind as the
+  design/research record, cross-linking forward. One canonical home either way. **S7a** does it.
+
+- **Botteron needs a low-pass we don't have.** `LP₂₀(|BP₄₀₋₂₅₀(x)|)` requires a low-pass primitive;
+  the repo ships `bandpass` only. S1 adds `filters.lowpass` as a sibling of `bandpass` rather than
+  faking it with a near-zero low edge.
+
+## Steps
+
+Each step is one focused commit, ends green (`ruff format` + `ruff check` + `mypy src` + `pytest`),
+and states its verification. ☐ todo · 🔨 wip · ✅ done
+
+### S0 — Remove the QRS-calibration default (make it required) ☐ (0.5–1 h) — **breaking · ships first as v0.3.0**
+- **Change:** `calibration/r_wave_anchoring.py` — **delete `DEFAULT_TARGET_QRS_PP_MV`** and make
+  `RWaveAnchoring(target_qrs_pp_mv=...)` a **required** argument; drop the constant from
+  `calibration/__init__.py` and the top-level `__init__.py` (`__all__` in both).
+  `calibration/_helpers.py` — `compute_calibration` keeps its either/or ergonomics but now raises
+  `TypeError` when **neither** `strategy` nor `target_qrs_pp_mv` is supplied, instead of silently
+  falling back. Docs: `docs/usage.md:46–47` ("the default 1.5 mV target") and `README.md:63` are
+  rewritten to show the value being passed explicitly.
+- **Why required rather than 1.5 → 1.0:** the **library-defaults rule** — a foundation library ships
+  no policy defaults; they live in the JSON Schema or the executable consumer's config. Flipping the
+  number makes the two copies agree today but keeps the structure that let them diverge. After this,
+  the constellation has exactly **one** target-amplitude default: iafdb-pipeline's
+  `cli/_config.py:189` (1.0), which is also where the research chat's rationale for the value should
+  be recorded. egm-signal stops having an opinion on the value.
+- **Verify:** `pytest` green — **three tests do rely on the default and must be updated**:
+  `test_calibration.py:95` (`RWaveAnchoring(preferred_leads=("V1",))`), `:123` (`RWaveAnchoring()`),
+  and `:140` (`isinstance(RWaveAnchoring(), CalibrationStrategy)`). Add a test asserting
+  `RWaveAnchoring()` raises `TypeError`, and one asserting `compute_calibration(record)` with neither
+  argument raises. `mypy src` clean.
+- **Blast radius (checked, 2026-07-28):** **no bank changes and no regeneration.** Every produced
+  bank came through the iafdb-pipeline CLI, which already passes its own config default of 1.0
+  (`cli/_config.py:189`, and all nine `examples/*.yaml`); the egm-contracts and egm-data fixtures and
+  `egm-data/docs/usage.md` all use 1.0 too. **The one hard break is iafdb-pipeline**, the sole
+  consumer: `export/bank_export.py:50` imports the constant by name (→ `ImportError`, not a silent
+  behavior change) and `:116` uses it as its own signature default. Editable sibling installs make
+  that live the moment this commits — hence the isolated release below.
+- **Tag timing: unblocked** — iafdb-pipeline said tag whenever (CL-033); don't hold v0.3.0 for their
+  adoption, since nothing in their plan depends on it and holding it would block SIG1, which *is* on
+  the early critical path. Commitment made in exchange: **post to the coordination log immediately
+  after tagging** so their red suite is scheduled, not a surprise. B22's honest end-to-end cost is the
+  pair — egm-signal 0.5–1 h **+** iafdb-pipeline 1–2 h — if the project-lead wants it costed whole.
+- **Release:** ships **alone** as **v0.3.0** — its own PR + tag, before SIG1 starts, so
+  iafdb-pipeline adopts one small breaking change and verifies green rather than debugging it tangled
+  up with a large feature add. Same de-risking logic as the schema-migration-wave rule. SIG1 then
+  lands as **v0.4.0** (additive), which iafdb-pipeline picks up when it starts IAF1. This makes S9's
+  version bump **0.4.0**, not 0.3.0.
+- **Cross-repo follow-up (Daniel is notifying the iafdb-pipeline chat):** drop the
+  `DEFAULT_TARGET_QRS_PP_MV` import, make `bank_export`'s `target_qrs_pp_mv` required so the CLI
+  config stays the single source, re-pin egm-signal to v0.3.0, and refresh the three now-resolved
+  `docs/theory.md` passages (~216, ~384, ~426–429) — recording the research rationale for 1.0 there,
+  since that repo now owns the value.
+- **Depends on:** none — independent of S1–S9.
+
+### S1 — `filters.lowpass` ☐ (0.5–1 h)
+- **Change:** `filters/lowpass.py` — zero-phase Butterworth low-pass along axis 0, mirroring
+  `bandpass`'s signature, Nyquist capping, and error contract. Re-export from `filters/__init__.py`.
+- **Verify:** unit tests — a two-tone signal loses the high tone and keeps the low one within
+  tolerance; shape preserved for 1-D and 2-D input; the same `ValueError` cases as `bandpass`.
+- **Depends on:** none.
+
+### S2 — Detection-function family ☐ (1–2 h)
+- **Change:** `extraction/activation_based/detection_functions.py` — `DetectionFunction` Protocol
+  (`compute(signal, fs) -> np.ndarray`, `name: str`) plus three frozen-dataclass concretes:
+  `RectifiedDerivative` (`g[i] = |x[i] − x[i−1]|`, the `dV/dt`-max default), `TeagerKaiser`
+  (`g[i] = x[i]² − x[i−1]·x[i+1]`), `BotteronEnvelope` (`LP₂₀(|BP₄₀₋₂₅₀(x)|)`, reusing `bandpass` +
+  S1's `lowpass`). All return an array the same length as the input, edges handled explicitly.
+- **Verify:** unit tests on a synthetic biphasic activation at a known sample — each `g` peaks within
+  a small tolerance of the true activation index; Botteron bridges a fractionated three-deflection
+  complex into one above-threshold run while the rectified derivative does not (the smoothing
+  mechanism the method spec relies on).
+- **Depends on:** S1.
+
+### S3 — Detection-threshold strategies ☐ (0.5–1.5 h)
+- **Change:** `thresholds/detection.py` — `DetectionThresholdStrategy` Protocol +
+  `MedianMadThreshold(c, lambda_)` (`τ = c·median(g) + λ·MAD(g)`, `+inf` when MAD is 0) and
+  `PercentileDetectionThreshold(q)`. Re-export from `thresholds/__init__.py`.
+- **Verify:** unit tests — known median/MAD input returns the hand-computed τ; a constant array
+  returns `+inf`; the percentile strategy matches `np.percentile` on a known distribution.
+- **Depends on:** none (parallel with S1/S2).
+
+### S4 — Activation detection: single + train ☐ (1.5–3 h)
+- **Change:** `extraction/activation_based/detection.py` — `detect_activation(x, fs, *,
+  detection_function) -> int` (global `argmax g`, the synthetic case) and
+  `detect_activation_train(x, fs, *, detection_function, threshold, refractory_ms) -> np.ndarray`
+  (threshold `g` at `τ_det`, then refractory non-maximum suppression at `Δ_refr`, keeping the largest
+  peak per refractory window; returns ordered int sample indices).
+- **Verify:** unit tests — a synthetic train of N activations at known spacing returns exactly N
+  indices within tolerance; a fractionated complex with three sub-deflections inside `Δ_refr` returns
+  **one** index (no over-counting); two genuine activations spaced just beyond `Δ_refr` return
+  **two** (no merging); a flat channel returns an empty array.
+- **Depends on:** S2, S3.
+
+### S5 — Activation-complex bounds (onset / offset) ☐ (1.5–3 h)
+- **Change:** `extraction/activation_based/complex_bounds.py` — `ActivationComplex` frozen dataclass
+  (`onset_sample`, `activation_sample`, `offset_sample`, `rise_samples`, `fall_samples`) +
+  `activation_bounds(g, t_a, *, theta)` walking outward from `t_a` to the last sub-θ sample before
+  and the first after. `theta` accepts either a fraction of the local peak or a multiple of the
+  baseline MAD (the two forms the method spec allows), with the choice explicit at the call site.
+- **Verify:** unit tests — a synthetic complex with known onset/offset recovers both within
+  tolerance; an asymmetric complex (long fibrotic tail) yields `fall > rise`; a complex running off
+  the array end clamps to the array bounds instead of raising.
+- **Depends on:** S2.
+
+### S6 — Anchor windowing + predicates ☐ (1–2 h)
+- **Change:** `extraction/activation_based/anchoring.py` — `AnchoredWindow` frozen dataclass
+  (`start_sample`, `end_sample`, `activation_sample`, `requested_position`, `realized_position`,
+  `signal`); `anchor_window_start(t_a, p, T) -> int` (`s = round(t_a − p(T−1))`, pure integer math);
+  `window_from_anchor(x, t_a, p, T) -> AnchoredWindow` (raises on out-of-range);
+  `window_is_within_bounds(s, T, n_samples) -> bool`; `window_is_single_beat(train, s, T) -> bool`
+  (exactly one member of `train` falls in `[s, s+T)`). `T < 2` raises — `realized_position` divides
+  by `T − 1`, and a one-sample window has no meaningful position.
+- **Verify:** unit tests — `p = 0.5` centres a known activation; `p = 0` / `p = 1` place it at the
+  first / last sample; `realized_position` is within half a sample of `requested_position` across a
+  sweep of `p` and `T`; `T < 2` raises; the boundary predicate is false exactly when the crop would
+  run off either end; the multi-beat predicate is true for an isolated activation and false when a
+  neighbour falls inside the window, including at the `[s, s+T)` half-open edges.
+- **Depends on:** S4 (the train type the multi-beat predicate consumes).
+
+### S7 — Package wiring + usage docs ☐ (1–2 h)
+- **Change:** `extraction/activation_based/__init__.py` re-exports; `extraction/__init__.py` and the
+  top-level `__init__.py` re-export the public names; a new `docs/usage.md` section covering the
+  detect → bound → anchor flow end to end — call signatures, argument meanings, and a runnable
+  example. The *math* stays out: formulas, derivations, and the citations go in `docs/theory.md`
+  (S7a), and usage links to it. Same usage-vs-theory split as egm-features.
+- **Verify:** a doctest-style example in `docs/usage.md` runs end to end on a synthetic record;
+  `from myocard_egm_signal import ...` resolves every new public name; `mypy src` clean.
+- **Depends on:** S4, S5, S6.
+
+### S7a — `docs/theory.md` — the repo's canonical math home ☐ (2.5–5 h)
+- **Change:** create `docs/theory.md`, matching the `egm-features/docs/theory.md` house style
+  (front matter → rendering note → table of contents → notation → numbered sections → references).
+  Two graduations in one pass, both **moves + polish, not re-derivations**:
+  - **SIG1's math**, graduated from
+    `intracardiac-platform/project/investigations/activation_splitting_method.md`: the detection
+    function `g` and its three variants (rectified `dV/dt` as default — the
+    `egm-features.activation_position` convention — Teager–Kaiser, Botteron envelope) with *when each
+    is worth its cost*; train detection (adaptive `τ_det` + refractory NMS) and envelope
+    onset/offset, including the smoothing mechanism that keeps a fractionated complex in one piece;
+    `window_from_anchor` (`s = round(t_a − p(T−1))`, `W = x[s:s+T]`) on the locked `[0,1]`-fraction
+    convention; and the boundary (`s < 0 or s+T > L`) + multi-beat predicates.
+  - **The already-shipped primitives**, graduated from `iafdb-pipeline/docs/theory.md` §1.1–1.3 and
+    §2.1: band-pass, sliding-window peak-to-peak, the threshold strategies, and R-wave-anchoring
+    calibration. Same ownership rule, applied to the primitives that predate it.
+- **Explicitly out of scope** (consumer-owned, they cross-link back): SEP2's sim-sizing response;
+  IAF1's drop / stride / per-record-filtering response; iafdb's §0 ADC-counts→mV input scaling, §4
+  sim-vs-real divergence map, §5 parameters, §6 provenance (boundary confirmed by iafdb-pipeline,
+  CL-029).
+- **Do not name a default calibration target** anywhere in the anchoring section — graduate the math
+  and point at the consumer's config for the value (iafdb-pipeline, CL-029). Naming it here would
+  rebuild in prose the two-sources-of-truth problem **S0** removes from code.
+- **Pool assembly comes with the threshold strategies** — settled in egm-signal's favour (CL-031 →
+  CL-034). I document pooling across the supplied channel list, the skip-absent behavior, and the ±inf
+  fail-closed sentinels; iafdb keeps *which* set it passes (`BIPOLAR_CHANNELS`, distal-to-proximal)
+  and its channel-layout story, with a cross-link from my §1.3.
+- **Measured channel facts for §1.3 + §2.1** (verified against all 32 IAFDB headers, 2026-07-29 —
+  iafdb's CL-034 correction confirmed and sharpened; state these as measured, not assumed):
+  - **All 5 CS bipolar pairs are present in all 32 records**, so `skip-absent` **never fires on the
+    bipolar path**. Document it as a general defensive guard with no exercising consumer today —
+    honest, and it stops a future reader inferring IAFDB motivation that isn't there.
+  - **Surface leads are exactly 3 per record and the set varies** — four distinct combinations:
+    `{I,II,V1}` ×12, `{aVF,II,V1}` ×8, `{aVF,I,II}` ×8, `{aVF,I,V1}` ×4. **No record carries all
+    eight.** So `RWaveAnchoring`'s priority walk over `preferred_leads` is **load-bearing, not
+    defensive** — that's the real per-record variation, and it lives in calibration (§2.1), not pooling.
+  - Under the shipped `DEFAULT_PREFERRED_LEADS`, lead **II is selected for 28/32 records and I for
+    4/32**; `aVL`, `III`, `aVR`, `V5` never occur in IAFDB at all, so the tail of the default priority
+    list is inert on this dataset. Useful for the paper's methods section ("which lead calibrated
+    which record") and a concrete argument for why the list is a kwarg rather than a constant.
+- **Verify:** every formula matches the implementation as built in S1–S6 — this is written **after**
+  the code so it documents as-built behavior, not intent; the `[[terminology-activation-peak-vs-rwave-anchoring]]`
+  distinction is stated explicitly, since this doc is now the one place both anchoring concepts are
+  described side by side; links resolve in both directions (investigation → theory, iafdb-pipeline →
+  theory).
+- **Coordination:** the iafdb-pipeline chat is trimming its `theory.md` to consumption-only and
+  linking here — its trim and my absorption must land together or the math is briefly orphaned. Its
+  §2.1 / §7 passages on the QRS-target default are the same ones **S0** already obliges them to
+  refresh, so both edits are one touch on their side.
+- **Not gold-plated:** per the project-lead, this is a permanent shared home, not tutorial exposition
+  — activation detection and windowing are familiar ground here, unlike egm-features' entropy /
+  fractal math, which is why that doc runs to 950 lines and this one shouldn't.
+- **Depends on:** S1–S6 (documents as-built), S7.
+
+### S8 — `filters.decimation` (B9) ☐ (0.5–1.5 h) — **conditional**
+- **Change:** `filters/decimation.py` — anti-alias low-pass + integer-factor downsample, reusing S1's
+  `lowpass`. **Only build this if §8.1 concludes the `T`/rate decision needs resampling**; otherwise
+  delete this step and leave B9 in `roadmap.md`.
+- **Verify:** unit tests — output length is `ceil(n/factor)`; a tone above the new Nyquist is
+  attenuated rather than aliased down; a tone below it survives.
+- **Depends on:** S1, and the §8.1 outcome.
+
+### S9 — Docs + phase-exit ☐ (0.5–1.5 h)
+- **Change:** `project/architecture.md` gains the `extraction/activation_based/` subpackage in the
+  folder-layout tree plus a short section on the third threshold hierarchy and the fail-closed
+  detection sentinel; `roadmap.md` drops the now-shipped Phase 1.5 items (and B9 if S8 ran);
+  `CHANGELOG.md` gets the `[Unreleased]` → **0.4.0** entry; version bump in `pyproject.toml`
+  (**0.4.0** — S0 already consumed 0.3.0 as its isolated breaking release).
+- **Verify:** the full `intracardiac-platform/project/pr_checklist.md` run passes, including the
+  §2 code-placement audit (nothing here reaches for a bank, an artifact, or a sibling package).
+- **Depends on:** all prior steps.
+
+## Complexity + estimate
+
+Scored with the rubric in
+`intracardiac-platform/project/investigations/estimate_vs_actual_tracking.md` §8.
+
+| Item | Cx | Size | Estimate | Driver notes |
+|---|---|---|---|---|
+| SIG1 | **5** | L | 10–21 h | *Change size:* several new modules + a new filter + a third threshold hierarchy + the repo's first `docs/theory.md`. *Novelty:* **high** — net-new detection algorithm, and the method spec itself warns that clean detection on real EGM "is hard in the best of cases." *Surface:* one repo, now with a cross-repo doc handoff to iafdb-pipeline. *Verification:* unit tests on synthetic signals with known activation positions — low burden. |
+| B9 | **1** | XS | 0.5–1.5 h | Mechanical; one module reusing S1. Conditional on §8.1. |
+| QRS-default removal | **2** | S | 0.5–1 h | Small diff, but **breaking**: a public name leaves `__all__`, `compute_calibration`'s fallback goes, three tests need updating, and it forces a coordinated adoption + re-pin in iafdb-pipeline plus its own release cycle. That coordination — not the code — is what lifts it off XS. No behavior change to any produced artifact. |
+
+**The L-vs-M call — now settled at L.** The first draft flagged a tension: zero coordination and cheap
+verification argued **M(3)**, algorithmic novelty argued **L(5)**. The `docs/theory.md` deliverable
+resolves it — it adds real surface and a cross-repo doc handoff without adding novelty, so **L(5)**
+now holds on two drivers rather than one. The **estimate** absorbed the graduation (8–16 h → 10–21 h);
+the **points** didn't move, which is the rubric working as intended: a doc move is hours, not
+complexity. It stays below the XL anchor (STU4) by a wide margin.
+
+## Effort tracking
+
+Mechanism: `intracardiac-platform/project/investigations/estimate_vs_actual_tracking.md` §7. Daniel
+speaks the markers; this chat stamps the time from `date`. **Active = marked span − breaks.**
+**Backstop:** unmarked silence > **2 h** = away.
+
+**Flow-down planning counts.** Per CL-024 §5b, a repo chat's flow-down / planning session counts toward
+its issues' `Actual` — it is real issue work, not platform overhead. That rule landed *after* this
+repo's planning session, so the first rows below are **reconstructed from file timestamps, not from
+markers**, and are flagged as such. Marker discipline applies from the next session on.
+
+### Session log
+
+| Timestamp (local) | Event | Focus (issue) | Note |
+|---|---|---|---|
+| 2026-07-28 ~14:1x | start *(reconstructed)* | SIG1 | **Estimated, not measured** — session opened some time before the first file write; Daniel to confirm. |
+| 2026-07-28 14:54 | *(anchor)* | SIG1 | Measured: `phase_1_5_plan.md` last write of the first drafting pass. |
+| 2026-07-28 18:36 | stop *(reconstructed)* | SIG1 | Measured: last `date` stamp of the evening's work. |
+| 2026-07-28 18:36 → 2026-07-29 10:0x | away | — | Overnight; excluded by the >2 h backstop. |
+| 2026-07-29 10:0x | resume | SIG1 | Coordination-log inbox pass: CL-024 / CL-028 / CL-029. |
+| 2026-07-29 *(open)* | — | SIG1 | Session still active. |
+
+### Effort by issue
+
+| Issue | Task-type | Estimate | Active | Elapsed | Sessions |
+|---|---|---|---|---|---|
+| SIG1 | pipeline (DSP primitive) | 10–21 h *(incl. 2.5–5 h docs)* | **~4.5 h so far** *(reconstructed — planning only, no code yet)* | 2 d | 1 |
+| B22 (QRS-default removal) | API change / release | 0.5–1 h | — | — | 0 |
+| B9 | pipeline (DSP primitive) | 0.5–1.5 h *(conditional)* | — | — | 0 |
+| **Repo total** | | **10.5–22 h** *(+0.5–1.5 h if B9 runs)* | **~4.5 h** | | |
+
+> _The ~4.5 h is **planning + coordination only** — no SIG1 code exists yet. It is bracketed from real
+> file timestamps (≈14:1x–18:36 on 2026-07-28, plus the 2026-07-29 inbox pass), **not** from spoken
+> markers, so treat it as ±1 h and flag the ledger row `reconstructed`. Its main use is as a data point
+> on what flow-down itself costs, which is exactly what CL-024 §5b decided to start capturing._
+
+## Notes / decisions log
+
+- **2026-07-28** — Escalated the anchor-window placement question (shared crop math in SIG1 vs.
+  duplicated in SEP2 + IAF1). Project-lead ruled it into egm-signal: `repo_charters` line 84 routes
+  segmentation here, the "keep it local" caveat applies only to single-consumer code, and one shared
+  helper is what stops SEP2 and IAF1 rounding a sample apart into a false position bias in STU5/STU4.
+  §3 updated; SEP2/IAF1 reworded to "response only."
+- **2026-07-28** — Project-lead confirmed SIG1 runs **parallel to Wave 1**, not in Wave 2.
+- **2026-07-28** — Added **S0** on Daniel's request; originated in the iafdb-pipeline chat, value
+  ruled by research. Scoped first as a 1.5 → 1.0 flip, then **escalated to the structural fix** —
+  Daniel ruled: **delete the constant, make the argument required**, per the library-defaults rule
+  (flipping the number would have left two copies of a policy default free to drift again). Verified
+  it changes no produced artifact; the CLI path already used 1.0.
+- **2026-07-28** — Release cadence for S0 settled (Daniel): **alone as v0.3.0**, before SIG1, so
+  iafdb-pipeline adopts one isolated breaking change and verifies green. SIG1 becomes **v0.4.0**.
+  Correction worth recording: the first draft of S0 claimed no tests relied on the default — true for
+  a value flip, **false** for the required-argument change, which breaks three
+  (`test_calibration.py:95`, `:123`, `:140`).
+- **2026-07-28** — **`docs/theory.md` added to SIG1** (project-lead), reversing my earlier design note
+  against it. Scope then widened by Daniel: the doc also **absorbs the already-shipped primitives'
+  math** — band-pass, sliding-window p-p, threshold strategies, R-wave anchoring — currently sitting
+  in `iafdb-pipeline/docs/theory.md` §1.1–1.3 / §2.1. Reason: iafdb-pipeline is trimming to
+  consumption-only *now*, so taking those sections in the same pass costs one coordination round
+  instead of two and applies the ownership rule completely rather than half. Estimate 8–16 h → 10–21 h;
+  Cx unchanged at L(5).
+- **2026-07-29** — CL-024 §5 closed both of my flow-down loose ends: the QRS-default removal is
+  **B22** (design §4), and **flow-down planning counts toward a repo's `Actual`**. SIG1-parallel-to-Wave-1
+  confirmed. Applied above; the retroactive effort rows are reconstructed, not marked.
+- **2026-07-29** — iafdb-pipeline replied on both handoffs. **CL-028** (S0): confirmed, planned as their
+  S0/B22, gated only on my v0.3.0 tag — with the correction that *their* adoption is 1–2 h, not
+  trivial, because 14 `export_bank(...)` test call sites rely on the signature default. My 0.5–1 h was
+  always repo-local, so my estimate stands. **CL-029** (theory): scope + timing agreed, they annotate
+  now and delete at my v0.4.0; two boundary details — don't carry the target *value* across (agreed,
+  folded into S7a) and leave pool assembly with them (**disagreeing**, see S7a).
+- **2026-07-29** — Both iafdb threads closed. **CL-033:** tag v0.3.0 whenever — don't hold it; S0 is
+  unblocked. **CL-034:** pool assembly conceded to egm-signal, *and* they corrected their own CL-029
+  claim: present-ness reflects **surface-ECG** variation, not bipolar, so `skip-absent` never fires on
+  the bipolar path. I verified across all 32 IAFDB headers before adopting it — confirmed, and
+  sharpened (3 surface leads per record, four distinct sets, no record with all eight). Facts folded
+  into S7a. No escalation needed.
+- **2026-07-28** — *Open, not escalated yet:* drawing `p ∼ 𝒫` currently sits with SEP2 and IAF1, so
+  the **representation of `𝒫`** (a `(lo, hi)` fraction pair, collapsed to a point for the fixed-position
+  baseline — the A4 decision, mirroring the mixer's `snr_db_range=(X,X)` idiom) is implemented twice.
+  Same drift-class argument that moved the crop math here, but far lower stakes than the rounding
+  case. Raise with the project-lead only if a second inconsistency shows up.
