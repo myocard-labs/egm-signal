@@ -2,7 +2,7 @@
 
 **Repo:** egm-signal · **Phase:** 1.5
 **Phase design doc:** `intracardiac-platform/phases/phase_1_5/design.md`
-**Status:** in progress · **Progress:** 2/11 steps done (S0 ✅ · S1 ✅)
+**Status:** in progress · **Progress:** 3/11 steps done (S0 ✅ · S1 ✅ · S2 ✅)
 
 **Release model (corrected 2026-08-01, Daniel).** Supersedes S0's "ships alone as v0.3.0 ahead of
 SIG1": egm-signal appears **once** in the Wave-1 order, so **all** of this plan's code lands before a
@@ -215,7 +215,83 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   tolerance; shape preserved for 1-D and 2-D input; the same `ValueError` cases as `bandpass`.
 - **Depends on:** none.
 
-### S2 — Detection-function family ☐ (1–2 h)
+### S2 — Detection-function family ✅ (1–2 h)
+- **Done 2026-08-01; revised 2026-08-02 after review.** New subpackage
+  `extraction/activation_based/` with `base.py` (`DetectionPreprocessor` **ABC**) +
+  `preprocessors.py` (`RectifiedDerivative`, `TeagerKaiser`, `BotteronEnvelope` + the two Botteron
+  default constants). 46 tests in `tests/test_detection_preprocessors.py`, 118 total; full gate green.
+- **Review change 1 — vocabulary (Daniel).** The three transforms are *not* detection functions;
+  they detect nothing. Detection is a three-stage chain and each stage now has its own name:
+  **detection preprocessing** (`DetectionPreprocessor`, the transform `x → g`) → **detection
+  thresholding** (S3, the decision rule) → **the detection function** (S4, the whole chain, which is
+  the only thing that actually detects). Renamed module + Protocol + test module accordingly.
+  **Cross-repo:** `activation_splitting_method.md` and design §3 both use "detection function" for
+  the *transform* — the usage this corrects. Flagged to the project-lead; SEP2/IAF1 import these
+  names, so it is worth aligning before Wave 2.
+- **Review change 2 — ABC instead of Protocol (Daniel).** A closed family with known structure
+  should *enforce* it, not document it. `compute()` is now a **template method** on the ABC:
+  validate → apply the short-input rule → delegate to the subclass's `_compute()`. A subclass that
+  omits `name` fails at class-definition time; one that omits `_compute` fails at instantiation.
+  `architecture.md` needs the ABC-vs-Protocol rule recorded at S9 (Protocol where *other repos'*
+  types must conform structurally — `Record`, `ThresholdStrategy`; ABC for families we ship and
+  extend in-repo).
+- **Review change 3 — `np.diff(prepend=)` readability, and a non-discriminating test (Daniel).**
+  Daniel queried whether `np.abs(np.diff(signal, prepend=signal[0]))` set `g[0]` to `x[0]` instead of
+  `0`, and whether `prepend` grew the output. **Both verified: the code was correct** — `prepend`
+  forms `[x[0], x[0], x[1], …]` *before* differencing, so `g[0] = x[0] − x[0] = 0` exactly, and
+  because `diff` then removes one element the length is preserved (checked at n = 2, 5, 100, 1000).
+  Two changes anyway:
+  1. **Rewritten as an explicit zero-fill** (`g = zeros(...); g[1:] = abs(diff(signal))`). Identical
+     output over random arrays, but it cannot be misread — and in code whose off-by-one shifts every
+     activation index, a reviewer losing time to the idiom *is* a defect. It also now mirrors
+     `TeagerKaiser`'s shape.
+  2. **The unit test could not have caught the bug he suspected.** Its fixture started at
+     `x[0] = 0.0`, so the expected `g[0] == 0.0` passes under *both* the correct behavior and the
+     `g[0] = x[0]` bug — demonstrated by running a deliberately buggy implementation against it.
+     Fixture changed to a non-zero first sample (verified: the buggy version now fails), plus a
+     dedicated randomized test asserting `g[0] == 0` where `x[0] ≠ 0`. **Right answer, weak test** —
+     the question was worth asking even though the code was fine.
+- **Review change 4 — `fs` moved onto `BotteronEnvelope.__init__` (Daniel).** Only the envelope needs
+  a sampling rate; the other two are pure sample-domain arithmetic and were carrying an argument they
+  ignored. `compute(signal)` is now the whole ABC signature, and `fs` sits with the band edges it
+  belongs to. It is validated at construction, so a bad rate fails before any signal is processed.
+  Two tests added: the rate-free pair now **reject** a second argument, and the envelope refuses to be
+  built without a rate (no default — guessing one would silently design the filters for the wrong
+  band rather than fail).
+  - **Trade-off accepted, documented in the class docstring and theory §2:** an envelope instance is
+    now **bound to one sampling rate**, and since a numpy array carries no rate, feeding it a
+    differently-sampled trace cannot be detected here. Mitigation is placement — construct it where
+    the rate is known, not at module scope. Worth stating because it is a *new* failure mode: with
+    `fs` per call the rate always travelled with the data.
+  - Timing note: done now specifically because S4 and the Wave-2 consumers (SEP2, IAF1) have not yet
+    bound to the old signature. After that this is a three-repo change.
+- **The ABC caught a real bug, not just a style point.** Hoisting the fail-closed short-input rule
+  into the template method (one `min_samples` per subclass) exposed that `BotteronEnvelope` **raised
+  from inside `sosfiltfilt`** on short input while its two siblings returned zeros — the same input,
+  a different failure mode depending on which preprocessor you picked. My original S2 test only
+  covered the other two, so it passed. Now: `min_samples = 16`, **derived** from scipy's
+  `padlen = 3·(2·len(sos)+1)` rule (2nd-order band-pass → `len(sos)=2` → padlen 15) and verified
+  empirically, with the boundary pinned by a test and the parametrized short-input test extended to
+  all three.
+- **Two deviations from the plan text, both toward house convention:**
+  1. **Protocol in `base.py`, not alongside the concretes.** `architecture.md` states the
+     Protocol-in-`base`/concretes-in-siblings split is "the pattern to follow for any new strategy
+     family", and `thresholds/` and `calibration/` both do it.
+  2. **Plain classes, not frozen dataclasses.** The house strategy pattern is a plain class with a
+     `name: str` class attribute (`AbsoluteThreshold`, `RWaveAnchoring`). It also sidesteps a real
+     trap: on a frozen dataclass, `name: str = "…"` becomes an *init field* callers could override,
+     and the `ClassVar` fix wouldn't satisfy the Protocol's mutable-attribute declaration.
+- **Contract decisions worth knowing downstream:** 1-D input only (detection is per-channel; a 2-D
+  `argmax` is meaningless) · output length == input length, so an index into `g` *is* a signal index ·
+  undefined positions filled with `0.0`, never a spurious boundary peak · degenerate-length input
+  returns zeros rather than raising, so a dead channel detects nothing (fail-closed) · Teager–Kaiser
+  returned **unclipped** — it can dip negative, and clipping is a policy call this layer doesn't own.
+- **Test-fixture bug caught by the suite, worth recording.** The first `_biphasic_activation` was a
+  *truncated* sine; its edge discontinuity is exactly as steep as the genuine upstroke, so
+  `RectifiedDerivative`'s argmax tied on the truncation and landed 4 samples late — a fixture
+  artifact reported as a detector error. Replaced with a **Gabor pulse** (sine under a Gaussian
+  envelope), which is also the more faithful model of a real tapered deflection. Measured offsets on
+  the corrected fixture: derivative **+0**, Botteron **+0**, Teager–Kaiser **−1** samples.
 - **Change:** `extraction/activation_based/detection_functions.py` — `DetectionFunction` Protocol
   (`compute(signal, fs) -> np.ndarray`, `name: str`) plus three frozen-dataclass concretes:
   `RectifiedDerivative` (`g[i] = |x[i] − x[i−1]|`, the `dV/dt`-max default), `TeagerKaiser`
@@ -290,7 +366,23 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   `from myocard_egm_signal import ...` resolves every new public name; `mypy src` clean.
 - **Depends on:** S4, S5, S6.
 
-### S7a — `docs/theory.md` — the repo's canonical math home ☐ (2.5–5 h)
+### S7a — `docs/theory.md` — the repo's canonical math home 🔨 (2.5–5 h) — **now incremental**
+- **Restructured 2026-08-01 (Daniel):** the theory doc is written **as the math lands**, not in one
+  pass at the end, so each step's math is reviewable while its code is fresh. **Every technique
+  carries a clickable primary-source link** (DOI where one exists, else PubMed/PMC/publisher) so a
+  reviewer can spin up on an unfamiliar method and check the implementation against its source.
+- **Created 2026-08-01** with §1 Filtering (zero-phase · band-pass · low-pass) and §2 Detection
+  functions (all three + a selection table). §3–§5 are stubbed with the step that fills them.
+- **Citation discipline adopted:** every DOI **verified against Crossref** before it goes in — title,
+  journal, volume, pages. This caught one of my own errors: I first cited Marchlinski 2000 for the
+  `dV/dt`-max *timing* convention, but that paper establishes **voltage-amplitude tiers**, not
+  activation timing. Replaced with **Steinhaus 1989** (Circ Res 64(3):449–462), which actually proves
+  the max-slope ↔ depolarization correspondence — and, usefully, bounds its error: >1.8 ms under
+  non-uniform coupling, i.e. **worst exactly on fibrotic substrate**. Marchlinski stays, scoped
+  correctly. Anything unverifiable is labelled (the 1930 Butterworth paper predates DOIs; its link is
+  marked an unofficial scan).
+- **Remaining for this step:** §3–§5 as S3–S6 land, then the graduation of the older primitives'
+  math from `iafdb-pipeline/docs/theory.md` (§1.2 band-pass is already done as part of this).
 - **Change:** create `docs/theory.md`, matching the `egm-features/docs/theory.md` house style
   (front matter → rendering note → table of contents → notation → numbered sections → references).
   Two graduations in one pass, both **moves + polish, not re-derivations**:
