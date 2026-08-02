@@ -69,14 +69,18 @@ coverage.xml
 *.ckpt
 *.safetensors
 
-data/
-banks/
-checkpoints/
-runs/
-logs/
-mlruns/
-wandb/
-artifacts/
+# Root-anchored (leading slash) on purpose: an unanchored `data/` matches at
+# ANY depth, so it would silently swallow a `src/myocard_egm_signal/data/`
+# source package — green locally, ModuleNotFoundError in CI. That trap has
+# already cost this fleet one red CI run (egm-classifier, Refactor Step 8).
+/data/
+/banks/
+/checkpoints/
+/runs/
+/logs/
+/mlruns/
+/wandb/
+/artifacts/
 
 # Allow tiny fixtures committed under tests/fixtures/ if needed:
 !tests/fixtures/**
