@@ -51,7 +51,7 @@ from .extraction import (
     extract_healthy_segments,
     extract_noise_segments,
 )
-from .filters import bandpass
+from .filters import bandpass, lowpass
 from .model import (
     DEFAULT_TEMPERATURE_BOUNDS,
     apply_temperature,
@@ -100,5 +100,6 @@ __all__ = [
     "extract_healthy_segments",
     "extract_noise_segments",
     "fit_temperature",
+    "lowpass",
     "sliding_window_peak_to_peak",
 ]
