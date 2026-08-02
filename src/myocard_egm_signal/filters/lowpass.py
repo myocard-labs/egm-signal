@@ -7,7 +7,7 @@ so the output is zero-phase.
 Why this exists
 ---------------
 The Botteron activation envelope
-(:mod:`~..extraction.activation_based.detection_functions`) is
+(:mod:`~..extraction.activation_based.preprocessors`) is
 ``LP(|BP(x)|)`` — rectification followed by a low-pass. The low-pass is
 the load-bearing step: it is what bridges the dips *between* the
 deflections of a fractionated activation, so the smoothed envelope
