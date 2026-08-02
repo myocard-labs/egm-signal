@@ -2,15 +2,19 @@
 
 **Repo:** egm-signal · **Phase:** 1.5
 **Phase design doc:** `intracardiac-platform/phases/phase_1_5/design.md`
-**Status:** planning · **Progress:** 0/11 steps done
+**Status:** in progress · **Progress:** 1/11 steps done (S0 ✅, pending PR + tag)
 **Repo estimate:** **10–21 h active** (SIG1, incl. the `docs/theory.md` graduation) · **+0.5–1 h**
-(QRS-default removal) · **+0.5–1.5 h** if B9 is promoted from backlog.
-Cold-start estimate by analogy — `estimation_ledger.csv` is empty, so there is no rate to multiply
-by yet. Ranges are deliberately wide.
+(B22) · **+0.5–1.5 h** if B9 is promoted from backlog. **Local only** — design §6 effort estimation +
+tracking is **skipped for Phase 1.5** (Daniel, 2026-07-29): no §6 roll-up, no `Actual`/`Elapsed`, no
+`estimation_ledger.csv` rows. These ranges stay here as rough planning aids and go nowhere.
 
-**Wave placement:** SIG1 touches no schema and this repo has no sibling deps, so it is **not** in the
-Wave-1 re-pin cascade and runs **parallel to Wave 1** (project-lead ruling, 2026-07-28). Study §8.1
-needs the detector, so this work is on the phase's early critical path.
+**Wave placement (updated 2026-08-01).** Superseded: the earlier "parallel to Wave 1" note. §7 now runs
+Wave 1 **serially, one repo per focused review** — egm-contracts ✅ → egm-data ✅ → SEP12 ✅ → CLF5 ✅ →
+**SIG1 (this repo, step 5)** → IAF3 → FEA1 → STU6. Still true that SIG1 has no schema and no sibling
+deps, so the order is an execution choice, not a dependency; SIG1 sits here because both Wave-2
+producers (SEP2, IAF1) import it, so it is the deepest critical-path piece to de-risk early. **The
+Wave-1 gate requires both pure libraries tagged**, so this session ends with **v0.3.0** (B22) and
+**v0.4.0** (SIG1) tagged.
 
 ---
 
@@ -96,7 +100,26 @@ S9.
 Each step is one focused commit, ends green (`ruff format` + `ruff check` + `mypy src` + `pytest`),
 and states its verification. ☐ todo · 🔨 wip · ✅ done
 
-### S0 — Remove the QRS-calibration default (make it required) ☐ (0.5–1 h) — **breaking · ships first as v0.3.0**
+### S0 — Remove the QRS-calibration default (make it required) ✅ (0.5–1 h) — **breaking · ships first as v0.3.0**
+- **Done 2026-08-01.** Constant deleted and dropped from both `__all__`s; `target_qrs_pp_mv` required
+  on `RWaveAnchoring`; `compute_calibration` raises `TypeError` when given neither a strategy nor a
+  target. Four test call sites updated (`:95`, `:123`, `:135`, `:140` — one more than the three
+  predicted: the `preferred_leads=()` check at `:135` also constructed bare). Three tests added: the
+  constructor raise, the neither-argument raise, and a guard asserting the constant is absent from
+  both namespaces. Docs de-defaulted (`docs/usage.md`, `README.md`) and the module docstring now
+  carries the *why*. **Verified:** 64 passed · `ruff format` 27 files unchanged · `ruff check` clean ·
+  `.gitignore` root-anchoring checked **both** directions with `git check-ignore`.
+  **mypy — not cleanly runnable in-sandbox:** 34 pre-existing `ndarray` generic errors from a numpy
+  stub-version mismatch, **identical count before and after** (verified against a stashed tree) and
+  **none in any file this change touched**. Needs one confirming run in the real env before the PR.
+- **Fold into this session (fleet housekeeping, both from the log):** **CL-099** — root-anchor the
+  `.gitignore` output-dir patterns (`data/` `banks/` `checkpoints/` `runs/` `logs/` `mlruns/` `wandb/`
+  `artifacts/` are all still unanchored here, so any same-named source package would be silently
+  swallowed — green locally, `ModuleNotFoundError` in CI), verifying both directions with
+  `git check-ignore`. **CL-117** — `__version__` already uses the `importlib.metadata` pattern
+  (`src/myocard_egm_signal/__init__.py` L74), so that one is verify-and-report only. Already satisfied
+  and needing nothing: `mypy files = ["src","tests"]` (CL-098/CL-100) and exact `[dev]` pins
+  `ruff==0.15.17` / `mypy==2.1.0` (CL-085).
 - **Change:** `calibration/r_wave_anchoring.py` — **delete `DEFAULT_TARGET_QRS_PP_MV`** and make
   `RWaveAnchoring(target_qrs_pp_mv=...)` a **required** argument; drop the constant from
   `calibration/__init__.py` and the top-level `__init__.py` (`__all__` in both).
@@ -194,6 +217,13 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   (`start_sample`, `end_sample`, `activation_sample`, `requested_position`, `realized_position`,
   `signal`); `anchor_window_start(t_a, p, T) -> int` (`s = round(t_a − p(T−1))`, pure integer math);
   `window_from_anchor(x, t_a, p, T) -> AnchoredWindow` (raises on out-of-range);
+  **`realized_position` is now a fleet contract** — this design note is what drove egm-contracts to add
+  a per-trace `activation_position` column to **both** banks (CL-052 · CL-060 · CL-062), `$ref`'d from
+  one shared `common.schema.json#/$defs/ActivationPosition` so the corpora cannot drift. Match its
+  wording exactly: `[0,1]` where **0.0 = first sample, 1.0 = last sample**, `idx = round(frac·(T−1))`,
+  and it is the position the crop **produced**, never one measured back off the waveform (a consumer
+  wanting the measured dV/dt-max position uses egm-features). `0.0` is a legitimate value, so nothing
+  downstream may treat absent as zero;
   `window_is_within_bounds(s, T, n_samples) -> bool`; `window_is_single_beat(train, s, T) -> bool`
   (exactly one member of `train` falls in `[s, s+T)`). `T < 2` raises — `realized_position` divides
   by `T − 1`, and a one-sample window has no meaningful position.
@@ -309,10 +339,16 @@ Mechanism: `intracardiac-platform/project/investigations/estimate_vs_actual_trac
 speaks the markers; this chat stamps the time from `date`. **Active = marked span − breaks.**
 **Backstop:** unmarked silence > **2 h** = away.
 
-**Flow-down planning counts.** Per CL-024 §5b, a repo chat's flow-down / planning session counts toward
-its issues' `Actual` — it is real issue work, not platform overhead. That rule landed *after* this
-repo's planning session, so the first rows below are **reconstructed from file timestamps, not from
-markers**, and are flagged as such. Marker discipline applies from the next session on.
+> **⚠ SUPERSEDED — effort tracking is skipped for Phase 1.5** (Daniel, 2026-07-29; design §6). Flow-down
+> proved a much bigger lift than planned, so this phase produces **no §6 roll-up, no `Actual` /
+> `Elapsed`, and no `estimation_ledger.csv` rows** — the ledger stays cold and the methodology is
+> redesigned in a later phase. Nothing below rolls up anywhere; **no markers are needed this phase**.
+> The rows are kept only as a record of what was measured before the call, and they answer my CL-032
+> question (whether to flag the reconstructed row) by removing the question.
+>
+> _Prior rule, now moot: CL-024 §5b had made a repo chat's flow-down session count toward its issues'
+> `Actual`. It landed after this repo's planning session, so the rows below were reconstructed from
+> file timestamps rather than markers._
 
 ### Session log
 
@@ -364,6 +400,15 @@ markers**, and are flagged as such. Marker discipline applies from the next sess
   consumption-only *now*, so taking those sections in the same pass costs one coordination round
   instead of two and applies the ownership rule completely rather than half. Estimate 8–16 h → 10–21 h;
   Cx unchanged at L(5).
+- **2026-08-01** — Caught up on end-of-planning + Wave 1. Four things landed on this repo: (1) **effort
+  tracking skipped** phase-wide (§6) — Effort section marked superseded; (2) **Wave 1 is serial** and
+  SIG1 is **step 5**, up now that CLF5 is done (CL-116) — supersedes "parallel to Wave 1"; (3) my
+  `realized_position` design note propagated into egm-contracts as the shared
+  **`ActivationPosition`** `$def` `$ref`'d by both banks (CL-052 / CL-060 / CL-062 / CL-064), so S6 is
+  now writing to a fleet contract rather than a local convention; (4) two fleet chores folded into the
+  S0 session — CL-099 `.gitignore` root-anchoring (outstanding) and CL-117 `__version__` (already
+  compliant). Context for later: §8.1 settled **T = 192 samples at 1 kHz** (`T ≡ 0 mod 64`, CLF3
+  MobileViT), which is what my `T` arguments will carry downstream.
 - **2026-07-29** — CL-024 §5 closed both of my flow-down loose ends: the QRS-default removal is
   **B22** (design §4), and **flow-down planning counts toward a repo's `Actual`**. SIG1-parallel-to-Wave-1
   confirmed. Applied above; the retroactive effort rows are reconstructed, not marked.

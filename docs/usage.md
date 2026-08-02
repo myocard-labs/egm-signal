@@ -43,12 +43,14 @@ R-wave anchoring measures the median QRS peak-to-peak on a chosen surface ECG le
 ```python
 from myocard_egm_signal import RWaveAnchoring, compute_calibration
 
-# Convenience function with the default 1.5 mV target:
-cal = compute_calibration(my_record, target_qrs_pp_mv=1.5)
+# `target_qrs_pp_mv` is required — there is no default. The target is
+# the amplitude scale your whole corpus is calibrated to, so it is a
+# policy value your config owns, not one this library picks for you.
+cal = compute_calibration(my_record, target_qrs_pp_mv=1.0)
 
 # Or pass a fully-constructed strategy with custom preferred leads:
 strat = RWaveAnchoring(
-    target_qrs_pp_mv=1.5,
+    target_qrs_pp_mv=1.0,
     preferred_leads=("II", "V1", "aVF"),
 )
 cal = strat.compute(my_record)

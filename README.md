@@ -60,7 +60,7 @@ filtered = bandpass(my_signal, fs=1000.0, low_hz=30, high_hz=300)
 # extract high-voltage bipolar segments. `record` is any object that
 # satisfies the Record Protocol (name, patient, fs, signal,
 # channel_names, channel_index).
-cal = RWaveAnchoring(target_qrs_pp_mv=1.5).compute(record)
+cal = RWaveAnchoring(target_qrs_pp_mv=1.0).compute(record)
 segments = extract_healthy_segments(
     record,
     threshold=AbsoluteThreshold(0.5),
