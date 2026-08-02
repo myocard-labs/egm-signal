@@ -92,7 +92,7 @@ def test_r_wave_anchoring_preferred_leads_kwarg(
     Building a record where only V1 is available and constructing
     a strategy with preferred_leads=('V1',) should pick V1, not II."""
     rec = synthetic_record_factory(surface_leads=("V1",))
-    cal = RWaveAnchoring(preferred_leads=("V1",)).compute(rec)
+    cal = RWaveAnchoring(target_qrs_pp_mv=1.0, preferred_leads=("V1",)).compute(rec)
     assert cal.metadata["lead"] == "V1"
 
 
@@ -120,9 +120,38 @@ def test_compute_calibration_rejects_strategy_plus_kwargs(
 ) -> None:
     """Passing both is ambiguous — raise rather than pick one and
     silently ignore the other."""
-    strat = RWaveAnchoring()
+    strat = RWaveAnchoring(target_qrs_pp_mv=1.0)
     with pytest.raises(TypeError, match="strategy OR keyword"):
         compute_calibration(synthetic_record, strategy=strat, target_qrs_pp_mv=2.0)
+
+
+def test_r_wave_anchoring_requires_a_target() -> None:
+    """The target amplitude is a policy value the library refuses to
+    choose, so constructing without one is a TypeError — not a silent
+    fallback to some built-in scale."""
+    with pytest.raises(TypeError):
+        RWaveAnchoring()  # type: ignore[call-arg]  # target deliberately omitted
+
+
+def test_compute_calibration_rejects_neither_strategy_nor_target(
+    synthetic_record: SyntheticRecord,
+) -> None:
+    """Omitting both is an error too. This previously fell back to a
+    library default, which let the same code calibrate to two different
+    scales depending on which entry point the caller came through."""
+    with pytest.raises(TypeError, match="no default"):
+        compute_calibration(synthetic_record)
+
+
+def test_default_target_is_not_exported() -> None:
+    """The removed constant must not creep back into the public API —
+    the point of B22 is that exactly one default exists, and it lives in
+    the consuming executable's config, not here."""
+    import myocard_egm_signal as sig
+    from myocard_egm_signal import calibration
+
+    assert not hasattr(sig, "DEFAULT_TARGET_QRS_PP_MV")
+    assert not hasattr(calibration, "DEFAULT_TARGET_QRS_PP_MV")
 
 
 def test_r_wave_anchoring_rejects_bad_config() -> None:
@@ -132,12 +161,12 @@ def test_r_wave_anchoring_rejects_bad_config() -> None:
         with pytest.raises(ValueError):
             RWaveAnchoring(target_qrs_pp_mv=target, window_ms=window)
     with pytest.raises(ValueError, match="preferred_leads"):
-        RWaveAnchoring(preferred_leads=())
+        RWaveAnchoring(target_qrs_pp_mv=1.0, preferred_leads=())
 
 
 def test_calibration_strategy_protocol_satisfied() -> None:
     """RWaveAnchoring is a structural subtype of CalibrationStrategy."""
-    assert isinstance(RWaveAnchoring(), CalibrationStrategy)
+    assert isinstance(RWaveAnchoring(target_qrs_pp_mv=1.0), CalibrationStrategy)
 
 
 def test_apply_calibration_scales_signal(synthetic_record: SyntheticRecord) -> None:

@@ -22,6 +22,17 @@ Caveat — engineering choice, not literature method
 R-wave anchoring of intracardiac amplitudes is NOT an established
 literature method. It is an engineering response to the calibration
 gap. Document transparently in downstream writeups.
+
+No default target amplitude
+---------------------------
+``target_qrs_pp_mv`` is **required**. This library deliberately ships no
+default for it: the target is a *policy* choice about what amplitude
+scale a corpus is calibrated to, and policy defaults belong in the
+executable consumer's configuration (or a JSON Schema), not in a
+foundation library. A library-side default previously coexisted with a
+different CLI-side default, so the same code calibrated to two
+different scales depending on which entry point you came through.
+Requiring the argument makes that impossible to reintroduce.
 """
 
 from __future__ import annotations
@@ -29,14 +40,6 @@ from __future__ import annotations
 from ..records import Record
 from .base import Calibration
 from .qrs_estimation import DEFAULT_PREFERRED_LEADS, estimate_qrs_peak_to_peak
-
-DEFAULT_TARGET_QRS_PP_MV: float = 1.5
-"""Default target QRS peak-to-peak amplitude on the chosen surface lead (mV).
-
-~1.5 mV is a reasonable median across leads I/II in healthy adults.
-Lead V1 peak-to-peak (largely the S-wave) is typically in this range
-too. Document the chosen value when reporting.
-"""
 
 
 class RWaveAnchoring:
@@ -57,7 +60,9 @@ class RWaveAnchoring:
     Parameters
     ----------
     target_qrs_pp_mv
-        Target peak-to-peak QRS amplitude in mV. Default ~1.5 mV.
+        Required. Target peak-to-peak QRS amplitude in mV — the scale
+        every record in the corpus is calibrated to. No default: see
+        the module docstring for why the library refuses to pick one.
     window_ms
         Half-window in milliseconds either side of each QRS annotation
         sample; the peak-to-peak is computed inside this window.
@@ -70,7 +75,7 @@ class RWaveAnchoring:
 
     def __init__(
         self,
-        target_qrs_pp_mv: float = DEFAULT_TARGET_QRS_PP_MV,
+        target_qrs_pp_mv: float,
         window_ms: float = 100.0,
         preferred_leads: tuple[str, ...] = DEFAULT_PREFERRED_LEADS,
     ) -> None:

@@ -26,11 +26,10 @@ from __future__ import annotations
 from ._helpers import compute_calibration
 from .base import Calibration, CalibrationStrategy
 from .qrs_estimation import DEFAULT_PREFERRED_LEADS, estimate_qrs_peak_to_peak
-from .r_wave_anchoring import DEFAULT_TARGET_QRS_PP_MV, RWaveAnchoring
+from .r_wave_anchoring import RWaveAnchoring
 
 __all__ = [
     "DEFAULT_PREFERRED_LEADS",
-    "DEFAULT_TARGET_QRS_PP_MV",
     "Calibration",
     "CalibrationStrategy",
     "RWaveAnchoring",

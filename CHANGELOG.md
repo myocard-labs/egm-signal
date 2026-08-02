@@ -4,6 +4,28 @@ All notable changes to `myocard-egm-signal` are documented here. The format foll
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project aims to follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-08-01
+
+### Removed
+
+- **BREAKING — `DEFAULT_TARGET_QRS_PP_MV`.** `RWaveAnchoring`'s `target_qrs_pp_mv` is now a
+  **required** argument, and `compute_calibration` raises `TypeError` when given neither a
+  strategy nor a target (it previously fell back to the library default).
+
+  *Why:* a foundation library ships no policy defaults. The target amplitude decides what scale
+  a whole corpus is calibrated to, so it belongs in the consuming executable's config. The
+  library default (1.5 mV) had drifted from iafdb-pipeline's CLI default (1.0 mV), so the same
+  code calibrated to two different scales depending on the entry point. Requiring the argument
+  makes that class of drift impossible rather than merely fixed.
+
+  *Migration:* pass the value explicitly — `RWaveAnchoring(target_qrs_pp_mv=1.0)`. No stored
+  data changes: every bank on disk was written through a CLI that already passed its own target.
+
+### Changed
+
+- `.gitignore` output-dir patterns are root-anchored (`/data/` rather than `data/`) so a
+  same-named source package can never be silently untracked.
+
 ## [0.2.0] — 2026-06-22
 
 ### Added
@@ -35,5 +57,6 @@ extraction, all in-memory over numpy arrays.
 
 Lean: numpy + scipy. No torch, no h5py, no internal myocard- dependencies.
 
+[0.3.0]: https://github.com/myocard-labs/egm-signal/releases/tag/v0.3.0
 [0.2.0]: https://github.com/myocard-labs/egm-signal/releases/tag/v0.2.0
 [0.1.0]: https://github.com/myocard-labs/egm-signal/releases/tag/v0.1.0

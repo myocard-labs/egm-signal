@@ -38,7 +38,6 @@ from importlib import metadata
 
 from .calibration import (
     DEFAULT_PREFERRED_LEADS,
-    DEFAULT_TARGET_QRS_PP_MV,
     Calibration,
     CalibrationStrategy,
     RWaveAnchoring,
@@ -79,7 +78,6 @@ except metadata.PackageNotFoundError:  # pragma: no cover — editable install w
 __all__ = [
     "DEFAULT_BIPOLAR_BAND_HZ",
     "DEFAULT_PREFERRED_LEADS",
-    "DEFAULT_TARGET_QRS_PP_MV",
     "DEFAULT_TEMPERATURE_BOUNDS",
     "AbsoluteQuietThreshold",
     "AbsoluteThreshold",
