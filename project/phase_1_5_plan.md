@@ -2,7 +2,16 @@
 
 **Repo:** egm-signal · **Phase:** 1.5
 **Phase design doc:** `intracardiac-platform/phases/phase_1_5/design.md`
-**Status:** in progress · **Progress:** 1/11 steps done (S0 ✅, pending PR + tag)
+**Status:** in progress · **Progress:** 2/11 steps done (S0 ✅ · S1 ✅)
+
+**Release model (corrected 2026-08-01, Daniel).** Supersedes S0's "ships alone as v0.3.0 ahead of
+SIG1": egm-signal appears **once** in the Wave-1 order, so **all** of this plan's code lands before a
+single PR → merge to `release` → tag. One commit per step, **no push until just before the PR**. B22
+and SIG1 therefore ship as **one release, v0.3.0** — the existing CHANGELOG entry gains an `### Added`
+section for SIG1 at S9 rather than a second version that never gets tagged. Consequence for
+iafdb-pipeline: the v0.3.0 tag they adopt (CL-028 / CL-033) now arrives at the *end* of this repo's
+work rather than ahead of SIG1 — harmless, since IAF3 follows SIG1 in the serial order anyway, but
+the log post promised in CL-030 lands later than implied.
 **Repo estimate:** **10–21 h active** (SIG1, incl. the `docs/theory.md` graduation) · **+0.5–1 h**
 (B22) · **+0.5–1.5 h** if B9 is promoted from backlog. **Local only** — design §6 effort estimation +
 tracking is **skipped for Phase 1.5** (Daniel, 2026-07-29): no §6 roll-up, no `Actual`/`Elapsed`, no
@@ -95,6 +104,34 @@ S9.
   the repo ships `bandpass` only. S1 adds `filters.lowpass` as a sibling of `bandpass` rather than
   faking it with a near-zero low edge.
 
+## How this repo is verified in-sandbox
+
+**Always run the gate inside a venv built from this repo's own `pyproject.toml`** — never with
+ad-hoc `pip install --break-system-packages` against the system interpreter:
+
+```
+python3 -m venv .venv-check
+.venv-check/bin/pip install -e ".[dev]"
+.venv-check/bin/python -m mypy                       # bare, per CL-098
+.venv-check/bin/python -m ruff format --check src tests
+.venv-check/bin/python -m ruff check src tests
+.venv-check/bin/python -m pytest -q
+```
+
+`.venv*/` is gitignored, so the venv can persist across steps.
+
+**Why it matters (learned the hard way at S0/S1).** The gate's result depends on the *numpy* version,
+and only `pip install -e ".[dev]"` resolves the one this repo declares (`numpy>=1.26,<2.5` → 2.4.6):
+
+| numpy | mypy result | why |
+|---|---|---|
+| newest (ignores the `<2.5` cap) | fails parsing `numpy/__init__.pyi` | its stubs use PEP-695 `type` statements, which `python_version = "3.10"` rejects |
+| 1.26 (the floor) | 43 spurious `type-arg` errors | pre-PEP-696 stubs make `ndarray` generic with no defaults, so `strict`'s `disallow_any_generics` flags every bare `np.ndarray` |
+| **2.4.6 (what `[dev]` resolves)** | **clean** | stubs carry TypeVar defaults, so bare `np.ndarray` is legal |
+
+Both failure modes are *environment* artifacts that look exactly like real type errors in files the
+change never touched — the tell is errors appearing in untouched modules.
+
 ## Steps
 
 Each step is one focused commit, ends green (`ruff format` + `ruff check` + `mypy src` + `pytest`),
@@ -109,9 +146,8 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   both namespaces. Docs de-defaulted (`docs/usage.md`, `README.md`) and the module docstring now
   carries the *why*. **Verified:** 64 passed · `ruff format` 27 files unchanged · `ruff check` clean ·
   `.gitignore` root-anchoring checked **both** directions with `git check-ignore`.
-  **mypy — not cleanly runnable in-sandbox:** 34 pre-existing `ndarray` generic errors from a numpy
-  stub-version mismatch, **identical count before and after** (verified against a stashed tree) and
-  **none in any file this change touched**. Needs one confirming run in the real env before the PR.
+  **mypy — clean** (re-verified 2026-08-01 in a proper project venv; the earlier "34 pre-existing
+  errors" report was my own environment mistake, see the verification note below).
 - **Fold into this session (fleet housekeeping, both from the log):** **CL-099** — root-anchor the
   `.gitignore` output-dir patterns (`data/` `banks/` `checkpoints/` `runs/` `logs/` `mlruns/` `wandb/`
   `artifacts/` are all still unanchored here, so any same-named source package would be silently
@@ -162,7 +198,17 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   since that repo now owns the value.
 - **Depends on:** none — independent of S1–S9.
 
-### S1 — `filters.lowpass` ☐ (0.5–1 h)
+### S1 — `filters.lowpass` ✅ (0.5–1 h)
+- **Done 2026-08-01.** `filters/lowpass.py` mirroring `bandpass`'s conventions (axis-0, 1-D/2-D,
+  `0.99·Nyquist` auto-cap, `sosfiltfilt`, order 2); re-exported from `filters/__init__.py` and the
+  top-level `__init__.py`; `docs/usage.md` gained a section + the module-table row. **8 tests added**
+  (72 total, all passing) — beyond the planned pass/attenuate/cap/2-D/raise set, two pin the
+  properties later steps depend on: **zero-phase** (a Gaussian bump's argmax does not move, so S5's
+  onset/offset crossings aren't biased) and **fractionation bridging** (a rectified three-deflection
+  complex low-passes into exactly **one** above-threshold run while the raw rectified signal
+  fragments — the mechanism S2's `BotteronEnvelope` and S5's bounds both rest on).
+- **Note:** the module docstring records *why* this isn't `bandpass(low_hz=ε)` — that would put a
+  spurious high-pass corner near DC, exactly where a rectified envelope carries most of its energy.
 - **Change:** `filters/lowpass.py` — zero-phase Butterworth low-pass along axis 0, mirroring
   `bandpass`'s signature, Nyquist capping, and error contract. Re-export from `filters/__init__.py`.
 - **Verify:** unit tests — a two-tone signal loses the high tone and keeps the low one within

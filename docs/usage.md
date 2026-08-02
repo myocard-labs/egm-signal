@@ -36,6 +36,18 @@ filtered = bandpass(my_signal, fs=1000.0, low_hz=30, high_hz=300)
 multichannel = bandpass(np.column_stack([sig_a, sig_b]), fs=1000.0, low_hz=30, high_hz=300)
 ```
 
+### Low-pass a signal
+
+`lowpass` is the same filter family with a single corner, and the same auto-capping and zero-phase guarantees:
+
+```python
+from myocard_egm_signal import lowpass
+
+smoothed = lowpass(my_signal, fs=1000.0, cutoff_hz=20)
+```
+
+Its main use here is the rectify-then-smooth step of an activation envelope: low-passing a *rectified* signal fills the dips between the deflections of a fractionated complex, so the complex reads as one event rather than several. Because the filter is zero-phase, the smoothed envelope's threshold crossings stay aligned with the features that produced them.
+
 ### Compute a per-record calibration
 
 R-wave anchoring measures the median QRS peak-to-peak on a chosen surface ECG lead and solves for the scalar that brings it to a chosen target:
@@ -210,7 +222,7 @@ If your producer doesn't have QRS annotations, use a different calibration strat
 | Module | What's in it |
 |---|---|
 | `myocard_egm_signal.records` | `Record` Protocol — the structural type the extractors consume. |
-| `myocard_egm_signal.filters` | `bandpass` (zero-phase Butterworth). Subpackage; future: notch, smoothing. |
+| `myocard_egm_signal.filters` | `bandpass` + `lowpass` (zero-phase Butterworth). Subpackage; future: notch, smoothing, decimation. |
 | `myocard_egm_signal.windowing` | `sliding_window_peak_to_peak` and future sliding-window primitives. |
 | `myocard_egm_signal.thresholds` | Keep-above (`ThresholdStrategy` + Absolute/Percentile/None) and keep-below (`NoiseSegmentStrategy` + AbsoluteQuiet/PercentileQuiet) strategy hierarchies. |
 | `myocard_egm_signal.calibration` | Signal-amplitude calibration: `Calibration` + `CalibrationStrategy` + `RWaveAnchoring` + `compute_calibration` + `estimate_qrs_peak_to_peak`. Calibrates raw EGM signals against a QRS-derived reference. |
