@@ -61,11 +61,15 @@ from .records import Record
 from .thresholds import (
     AbsoluteQuietThreshold,
     AbsoluteThreshold,
+    DetectionThreshold,
+    MedianMadThreshold,
     NoiseSegmentStrategy,
     NoThreshold,
+    PercentileDetectionThreshold,
     PercentileQuietThreshold,
     PercentileThreshold,
     ThresholdStrategy,
+    median_absolute_deviation,
 )
 from .windowing import sliding_window_peak_to_peak
 
@@ -83,10 +87,13 @@ __all__ = [
     "AbsoluteThreshold",
     "Calibration",
     "CalibrationStrategy",
+    "DetectionThreshold",
     "HealthySegment",
+    "MedianMadThreshold",
     "NoThreshold",
     "NoiseSegment",
     "NoiseSegmentStrategy",
+    "PercentileDetectionThreshold",
     "PercentileQuietThreshold",
     "PercentileThreshold",
     "RWaveAnchoring",
@@ -101,5 +108,6 @@ __all__ = [
     "extract_noise_segments",
     "fit_temperature",
     "lowpass",
+    "median_absolute_deviation",
     "sliding_window_peak_to_peak",
 ]
