@@ -16,8 +16,8 @@ sentinel conventions) see
 [`project/architecture.md`](../project/architecture.md).
 
 > **Status: written incrementally.** Sections land as their code does,
-> alongside Phase-1.5 SIG1. §1–§2 are complete; §3–§5 arrive with the
-> steps named in their stubs. This doc is also the destination for the
+> alongside Phase-1.5 SIG1. §1–§3.4 are complete; §3.5–§5 arrive with
+> the steps named in their stubs. This doc is also the destination for the
 > egm-signal math currently parked in `iafdb-pipeline/docs/theory.md`
 > §1.1–1.3 / §2.1 — the repo that owns a primitive owns its math — so
 > some sections graduate content rather than deriving it fresh.
@@ -39,26 +39,96 @@ sentinel conventions) see
   - [2.2 Teager–Kaiser energy](#22-teagerkaiser-energy)
   - [2.3 Botteron envelope](#23-botteron-envelope)
   - [2.4 Choosing between them](#24-choosing-between-them)
-- [3. Thresholding and the detection function](#3-thresholding-and-the-detection-function) *(S3–S4)*
+- [3. Thresholding and the detection function](#3-thresholding-and-the-detection-function)
+  - [3.1 Why the threshold is read off the curve](#31-why-the-threshold-is-read-off-the-curve)
+  - [3.2 Median/MAD threshold](#32-medianmad-threshold)
+  - [3.3 Percentile threshold](#33-percentile-threshold)
+  - [3.4 What the threshold is applied to](#34-what-the-threshold-is-applied-to)
+  - [3.5 Refractory suppression](#35-refractory-suppression) *(S4)*
 - [4. Activation-complex bounds](#4-activation-complex-bounds) *(S5)*
 - [5. Anchor windowing](#5-anchor-windowing) *(S6)*
 - [6. References](#6-references)
 
 ## Notation
 
+Every symbol used anywhere below, grouped by where it appears. Symbols
+introduced by a section that has not landed yet are marked with the step
+that brings them.
+
+**Signal and indexing**
+
 - $x[i]$, $i = 0,\dots,n-1$ — one channel of bipolar EGM, $n$ samples at
-  sampling frequency $f_s$ Hz. **One channel**: every operator below is
+  sampling frequency $f_s$ Hz. **One channel**: every operator here is
   defined per-channel.
 - $f_\text{Nyq} = f_s/2$ — the Nyquist frequency.
-- $g[i]$ — the **detection curve**: a same-length transform of $x$
-  produced by a detection preprocessor (§2), whose local maxima sit at
-  activations.
+- $dV/dt$ — the signal's time derivative; $\lvert dV/dt\rvert$ its
+  magnitude, approximated by the first difference.
+
+**Filtering (§1)**
+
+- $H(\omega)$ — a filter's frequency response at angular frequency
+  $\omega$; $\overline{H(\omega)}$ its complex conjugate.
+- $H_\text{fb}(\omega)$ — the *forward-backward* (two-pass) response,
+  $\lvert H(\omega)\rvert^2$.
+- $\lvert H(f)\rvert^2$ — magnitude-squared response at frequency $f$.
+- $N$ — Butterworth filter order.
+- $f_c$ — a filter's cutoff (corner) frequency.
+- $f_\text{lo}$, $f_\text{hi}$ — band-pass lower and upper edges.
+- $\varepsilon$ — an arbitrarily small positive number, used only to
+  describe the degenerate band-pass we *reject* in §1.3.
+- $\mathrm{BP}_{40\text{–}250}$, $\mathrm{LP}_{20}$ — a band-pass and a
+  low-pass, subscripted with their cutoffs in Hz.
+
+**Detection preprocessing (§2)**
+
+- $g$, $g[i]$ — the **detection curve**: a same-length transform of $x$
+  whose local maxima sit at activations.
+- $A$, $\Omega$, $\phi$ — amplitude, digital angular frequency and phase
+  of the test sinusoid used to derive what Teager–Kaiser measures
+  (§2.2). $\Omega \ll 1$ denotes the low-frequency limit.
 - $t_a$ — an **activation time**, as a sample index.
+- $\arg\max$ — the index at which a curve attains its maximum.
+
+**Thresholding (§3)**
+
+- $\tau$ — the detection threshold. A **local maximum** of $g$ becomes a
+  candidate when $g[i] \ge \tau$ (§3.4); it is not applied sample-wise.
+- $c$ — multiplier on the baseline median.
+- $\lambda$ — multiplier on the MAD.
+- $\operatorname{median}(\cdot)$ — the median.
+- $\operatorname{MAD}(g) = \operatorname{median}(\lvert g - \operatorname{median}(g)\rvert)$
+  — the median absolute deviation, a robust scale estimate in raw units.
+- $\sigma$ — the standard deviation, and $k$ its multiplier in the
+  mean-plus-$k\sigma$ rule we *reject* in §3.2.
+- $P_q(g)$ — the $q$-th percentile of $g$; $q \in (0, 100)$.
+- $+\infty$ — the fail-closed sentinel returned for an empty or constant
+  curve.
+- $\Delta_\text{refr}$ — the refractory interval, the minimum spacing
+  between distinct activations. *(§3.5, S4.)*
+
+**Complex bounds (§4, S5)**
+
+- $\theta$ — the envelope threshold at which onset and offset are read,
+  either a fraction of the local peak or a multiple of the baseline MAD.
+- $t_\text{on}$, $t_\text{off}$ — onset and offset sample indices.
+- $r_\text{rise} = t_a - t_\text{on}$,
+  $r_\text{fall} = t_\text{off} - t_a$ — the rising and falling
+  durations of an activation complex.
+
+**Anchor windowing (§5, S6)**
+
+- $T$ — window length in samples.
+- $p \in [0,1]$ — the activation's fractional position within the
+  window; $0.0$ is the first sample, $1.0$ the last.
+- $s = \lfloor t_a - p\,(T-1) \rceil$ — the window's start sample.
 - $\lfloor\cdot\rceil$ — round to nearest integer.
 
-Amplitudes are whatever unit the caller supplies. Nothing here assumes
-mV: the operators are scale-equivariant, and the thresholds that consume
-them (§3) are computed from the distribution of $g$ itself.
+**Conventions**
+
+Amplitudes are whatever unit the caller supplies — nothing here assumes
+mV. The operators are scale-equivariant and the thresholds are computed
+from the distribution of $g$ itself, so a change of units passes through
+without retuning.
 
 ## 1. Filtering
 
@@ -354,11 +424,34 @@ envelope is needed anyway.
 
 ### 2.4 Choosing between them
 
-| | cost | noise robustness | fractionation | use when |
-|---|---|---|---|---|
-| Rectified derivative | 1 subtract | lowest — differencing amplifies HF | fragments it | clean signal; agreement with `egm-features` positions matters |
-| Teager–Kaiser | 3 multiplies | middling | fragments it | amplitude alone misleads (sharp low-voltage deflections) |
-| Botteron envelope | 2 filter passes | highest | **merges it** | real AF electrograms; whenever peak *counting* must be right |
+The split that decides behaviour is **sharp vs smoothed**, because it
+sets whether a *fractionated* activation reaches the next stage as one
+peak or several.
+
+| | family | cost | noise robustness | fractionation | timing |
+|---|---|---|---|---|---|
+| Rectified derivative | sharp | 1 subtract | lowest — differencing amplifies HF | **fragments** it | crispest |
+| Teager–Kaiser | sharp | 3 multiplies | middling | **fragments** it | crisp |
+| Botteron envelope | smoothed | 2 filter passes | highest | **merges** it | biased late on asymmetric complexes |
+
+All three **gate on amplitude**; only the envelope also **merges
+fractionation**, at the $g$ level, before any refractory logic runs.
+
+**The method spec's defaults.** For the **IAFDB train** — real, noisy,
+fractionated — the **Botteron envelope**, because the smoothing
+pre-solves fractionation and leaves refractory suppression (§3.5) as a
+safety net rather than the primary defence. For **synthetic**, where one
+activation sits at a location the generator already knows, any of them
+works and the rectified derivative gives the crispest timing; detection
+there is a cross-check, not a measurement.
+
+**The envelope's timing bias.** Smoothing pulls the envelope's maximum
+toward the *heavier* side of an asymmetric complex, so a long
+fractionated tail — the fibrotic case — drags the detected time late.
+The crop absorbs a few milliseconds of anchor error, so a first pass can
+live with it; the fix when precise timing matters is the optional
+two-stage refinement, which snaps the accepted time back to the local
+$\lvert dV/dt\rvert$ maximum (§3.5).
 
 The three are **not interchangeable at a fixed threshold** — a
 derivative curve is spiky and an envelope is broad, so the same numeric
@@ -368,13 +461,147 @@ numbers.
 
 ## 3. Thresholding and the detection function
 
-*Lands with S3 (adaptive thresholds) and S4 (refractory non-maximum
-suppression, completing the chain).* Will cover: the median/MAD adaptive threshold
-$\tau = c\cdot\mathrm{median}(g) + \lambda\cdot\mathrm{MAD}(g)$ and why
-MAD rather than standard deviation; the fail-closed $+\infty$ sentinel
-when $\mathrm{MAD}(g) = 0$; and refractory non-maximum suppression with
-its two-sided failure mode (splitting one fractionated activation vs
-merging two genuine ones).
+Stage two: given the detection curve $g$, decide how prominent a sample
+must be to count as a candidate. Stage three — refractory suppression,
+which turns candidates into an activation train — lands with S4.
+
+### 3.1 Why the threshold is read off the curve
+
+A fixed number cannot work. The three preprocessors produce
+differently-scaled curves, and EGM amplitude varies by an order of
+magnitude across records, channels and patients, so any absolute level
+would need retuning per combination. Both rules below are therefore
+*adaptive*: they read their level from the curve they are given. Same
+idea as constant-false-alarm-rate detection in radar — estimate the
+background from the data, then sit a fixed distance above it.
+
+### 3.2 Median/MAD threshold
+
+$$
+\tau = c\,\operatorname{median}(g) + \lambda\,\operatorname{MAD}(g),
+\qquad
+\operatorname{MAD}(g) = \operatorname{median}\bigl(\lvert g - \operatorname{median}(g)\rvert\bigr).
+$$
+
+A robust analogue of "mean plus $k$ standard deviations": the median
+locates the baseline, the MAD measures its spread, $\lambda$ sets how far
+above it to sit.
+
+**Why MAD and not $\sigma$** — the load-bearing choice. The curve
+*contains the activations being detected*, and in it they are large
+outliers. The standard deviation has a **breakdown point of zero**: one
+arbitrarily large sample moves it arbitrarily far. So a $\sigma$-based
+threshold rises with the very events it is meant to find — a channel
+with more or larger activations gets a higher bar and detects a smaller
+fraction of them, which is exactly backwards. The MAD has a breakdown
+point of **50%**: up to half the samples may be arbitrary without moving
+it. Activations occupy a few percent of a record, so the MAD measures
+the baseline, which is what a detection threshold should reference.
+
+Measured on a 2000-sample curve, going from 5 activations to 200:
+
+| rule | $\tau$ at 5 | $\tau$ at 200 | drift |
+|---|---|---|---|
+| $c\cdot\mathrm{median} + \lambda\cdot\mathrm{MAD}$ | 0.53 | 0.62 | **x1.16** |
+| $\mathrm{mean} + k\,\sigma$ | 12.7 | 79.9 | x6.3 |
+
+$\lambda$ is in **raw MAD units**. For Gaussian data
+$\sigma \approx 1.4826\,\mathrm{MAD}$, so multiply by that to read it as a
+sigma multiple. Neither $c$ nor $\lambda$ has a default: how aggressive
+detection should be is a policy the calling pipeline owns.
+
+**$\mathrm{MAD} = 0$ is not an error.** It means over half the samples
+share one value — equally true of a dead channel *and* of a clean
+synthetic trace that is exactly flat between activations. The two are
+indistinguishable from $g$ alone, so it is deliberately not
+special-cased: the formula degrades to $\tau = c\cdot\mathrm{median}(g)$,
+which for a zero baseline is $\tau = 0$. That is where the comparison
+convention earns its keep (§3.4).
+
+### 3.3 Percentile threshold
+
+$$
+\tau = P_q(g).
+$$
+
+Fixes the candidate *rate* rather than their prominence: at $q = 99$ at
+most 1% of samples clear the bar, whatever the curve looks like.
+Predictable and shape-independent, which suits a first pass on an
+unfamiliar record. Its weakness mirrors that strength — it always
+promotes something, so a channel with no activations still yields its
+top 1%. An exploration tool, not a production splitter.
+
+### 3.4 What the threshold is applied to
+
+**Local maxima, not every sample.** Candidate extraction takes the points
+where
+
+$$
+g[i-1] < g[i] > g[i+1] \quad\text{and}\quad g[i] \ge \tau ,
+$$
+
+then filters them by a minimum **prominence** to drop noise blips and
+far-field. A fractionated complex may contribute several candidates, and
+that is intended — deciding which are *distinct activations* is the
+refractory step's job (§3.5), on the time axis.
+
+**Why not one candidate per above-$\tau$ segment.** The tempting
+simplification is to collapse each contiguous above-$\tau$ run to its
+single $\arg\max$. The method spec explicitly rules this out, and
+measurement shows why: it lets the *threshold* do the merging, so two
+genuine activations riding **one** above-$\tau$ run — common in fast AF,
+when the envelope never fully returns to baseline between beats —
+collapse into one peak, a silent miss that no $\Delta_\text{refr}$
+tuning can recover.
+
+Measured, two genuine activations 80–90 ms apart:
+
+| $f_c$ (envelope) | above-$\tau$ segments | widest | segment-argmax | local maxima |
+|---|---|---|---|---|
+| 20 Hz | 2 | 49 | 2 activations | 2 activations |
+| 10 Hz | 1 | **168** | **1 — one lost** | 2 activations |
+| 6 Hz | 1 | **232** | **1 — one lost** | 2 activations |
+
+With $\Delta_\text{refr} = 60$ samples, those runs span three to four
+refractory intervals. The above-$\tau$ segment *is* still used — it is
+the $W_\text{act}$ that §4 measures onset and offset within — just not
+as the merge rule.
+
+**On $\ge$ versus $>$.** The comparison is at-or-above, matching the
+method spec and `scipy.signal.find_peaks(height=...)`. An earlier
+revision of this document argued for strictly-greater, on the grounds
+that a clean sparse curve has $\tau = 0$ and $\ge$ would admit all 1000
+baseline samples where $>$ admitted 8. That reasoning was sound *for
+sample-wise thresholding*, which is not the extraction rule: a flat
+baseline contains no strict local maximum, so under local-maxima
+extraction the two comparisons give **identical** results (verified: 8
+and 8 on that curve; 4 and 4 on a clean Gabor pulse). The comparison
+simply is not load-bearing here.
+
+Two degenerate curves never reach a rule at all, both returning
+$+\infty$ (fail-closed, matching the empty-pool sentinel convention): an
+**empty** curve, and a **constant** one, which has no peaks to separate.
+
+> **Implementation** — `thresholds/detection.py`; ABC in
+> `thresholds/base.py`; candidate extraction in
+> `extraction/activation_based/` (S4).
+> **Pinned by** `tests/test_detection_thresholds.py`, including the
+> breakdown-point contrast and the local-maxima equivalence.
+> **Sources** — [Hampel 1974, JASA 69(346):383-393](https://doi.org/10.1080/01621459.1974.10482962)
+> (the influence curve and breakdown point, the formal basis for
+> preferring MAD) ·
+> [Leys et al. 2013, J Exp Soc Psychol 49(4):764-766](https://doi.org/10.1016/j.jesp.2013.03.013)
+> (a short, readable argument for median/MAD over mean/SD, with the
+> 1.4826 consistency constant) ·
+> [Pan & Tompkins 1985, IEEE TBME BME-32(3):230-236](https://doi.org/10.1109/TBME.1985.325532)
+> (the local-peaks → threshold → refractory chain this follows).
+
+### 3.5 Refractory suppression
+
+*Lands with S4, completing the chain.* Will cover non-maximum
+suppression over a refractory interval $\Delta_\text{refr}$, and its
+two-sided failure mode: splitting one fractionated activation into
+several, versus merging two genuine ones.
 
 ## 4. Activation-complex bounds
 
@@ -448,6 +675,30 @@ is the link; otherwise PubMed/PMC or the publisher page.
   [[DOI]](https://doi.org/10.1161/01.RES.64.3.449) — the basis for
   max-slope-as-activation-time, **and** the error bounds under
   non-ideal propagation that §2.1 warns about.
+
+### Event detection
+
+- **Pan J, Tompkins WJ.** *A Real-Time QRS Detection Algorithm.* IEEE
+  Transactions on Biomedical Engineering BME-32(3):230–236, 1985.
+  [[DOI]](https://doi.org/10.1109/TBME.1985.325532) — the
+  local-peaks → threshold → refractory chain this detection function
+  follows, and the origin of refractory blanking as a suppression rule.
+
+### Robust statistics
+
+- **Hampel FR.** *The Influence Curve and its Role in Robust
+  Estimation.* Journal of the American Statistical Association
+  69(346):383–393, 1974.
+  [[DOI]](https://doi.org/10.1080/01621459.1974.10482962) — the
+  influence curve and breakdown point; the formal basis for preferring
+  the MAD over the standard deviation on data containing the outliers
+  you are trying to find.
+- **Leys C, Ley C, Klein O, Bernard P, Licata L.** *Detecting outliers:
+  Do not use standard deviation around the mean, use absolute deviation
+  around the median.* Journal of Experimental Social Psychology
+  49(4):764–766, 2013.
+  [[DOI]](https://doi.org/10.1016/j.jesp.2013.03.013) — short and
+  readable, and the source of the 1.4826 consistency constant.
 
 ### Clinical conventions
 
