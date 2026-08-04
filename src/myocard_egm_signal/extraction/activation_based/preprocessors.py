@@ -6,29 +6,53 @@ anything**. They produce the curve that the detection threshold
 form the detection function (``detection.py``). See
 :mod:`~.base` for the full vocabulary.
 
-Three implementations, in increasing order of noise-robustness and cost:
+Two families, three implementations
+-----------------------------------
+The split that matters is **sharp vs smoothed**, because it decides
+whether a *fractionated* activation arrives at the next stage as one
+peak or several.
 
-- :class:`RectifiedDerivative` — ``|x[i] - x[i-1]|``. The default, and
-  the direct expression of the ``dV/dt``-max activation convention.
-  Cheapest; also the most sensitive to high-frequency noise, since
-  differencing amplifies it.
+**Sharp** — spike at *every* steep deflection, so one fractionated
+complex yields several peaks and the refractory suppression downstream
+has to collapse them:
+
+- :class:`RectifiedDerivative` — ``|x[i] - x[i-1]|``. The direct
+  expression of the ``dV/dt``-max activation convention. Cheapest, and
+  the crispest *timing*; also the most sensitive to high-frequency
+  noise, since differencing amplifies it.
 - :class:`TeagerKaiser` — ``x[i]^2 - x[i-1]*x[i+1]``. Tracks
   instantaneous *energy* (amplitude times frequency), so it responds to
   a fast low-amplitude deflection that an amplitude-only measure would
   miss, at three multiplies per sample.
+
+**Smoothed** — merges the deflections of one complex at the ``g`` level,
+so it largely delivers one peak per activation *before* any refractory
+logic:
+
 - :class:`BotteronEnvelope` — ``LP(|BP(x)|)``. Band-pass, rectify,
-  smooth. The most robust, and the only one that presents a
-  fractionated activation as a single event: the low-pass fills the
-  dips *between* its deflections.
+  smooth. The low-pass fills the dips *between* deflections.
+
+All three **gate on amplitude** (activations stand out from baseline);
+only the envelope also **merges fractionation**.
 
 Which to use
 ------------
-Start with :class:`RectifiedDerivative` — on clean or lightly-noisy
-signal it agrees with the others and is free. Reach for
-:class:`BotteronEnvelope` when the signal is fractionated or noisy
-enough that peak *counting* goes wrong, which is the regime real AF
-electrograms live in. :class:`TeagerKaiser` sits between them and is the
-usual choice when amplitude alone is misleading.
+Per the method spec:
+
+- **IAFDB train (real, noisy, fractionated): the Botteron envelope.**
+  The smoothing pre-solves fractionation, leaving refractory suppression
+  as a safety net for residual splits rather than the primary defence.
+- **Synthetic (one known activation): any of them**, and
+  :class:`RectifiedDerivative` gives the crispest timing. The generator
+  knows where it put the activation, so detection is a cross-check
+  rather than a measurement.
+
+**The envelope's known cost — a timing bias.** Low-pass smoothing pulls
+the envelope's peak toward the *heavier* side of an **asymmetric**
+complex, so a long fractionated tail drags the detected time late. For a
+first pass that is acceptable (the crop absorbs a few ms of anchor
+error); when precise timing is wanted, the optional two-stage refinement
+snaps the accepted time back to the local ``|dV/dt|`` maximum.
 
 These differ in what they are *shaped* like — a derivative curve is
 spiky, an envelope is broad — so a threshold tuned against one does not
@@ -68,7 +92,7 @@ outward.
 
 
 class RectifiedDerivative(DetectionPreprocessor):
-    """``g[i] = |x[i] - x[i-1]|`` — the ``dV/dt``-max convention.
+    """``g[i] = |x[i] - x[i-1]|`` — the ``dV/dt``-max convention. Sharp.
 
     Activation is taken to occur at the steepest deflection: as the
     wavefront passes under the electrode pair the recorded field
@@ -100,7 +124,7 @@ class RectifiedDerivative(DetectionPreprocessor):
 
 
 class TeagerKaiser(DetectionPreprocessor):
-    """``g[i] = x[i]^2 - x[i-1]*x[i+1]`` — the Teager-Kaiser energy operator.
+    """``g[i] = x[i]^2 - x[i-1]*x[i+1]`` — Teager-Kaiser energy. Sharp.
 
     Approximates instantaneous energy (amplitude^2 times frequency^2),
     so a fast deflection scores highly even when its amplitude is
@@ -128,7 +152,9 @@ class TeagerKaiser(DetectionPreprocessor):
 
 
 class BotteronEnvelope(DetectionPreprocessor):
-    """``g = LP(|BP(x)|)`` — band-pass, rectify, low-pass.
+    """``g = LP(|BP(x)|)`` — band-pass, rectify, low-pass. Smoothed.
+
+    The method spec's **default for the IAFDB train**.
 
     The robustness upgrade, and the only one of the three that keeps a
     **fractionated** activation in one piece. A fractionated complex
