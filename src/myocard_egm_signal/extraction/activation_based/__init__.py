@@ -13,7 +13,13 @@ only the last one detects.
    emphasises activations.
 2. **Detection thresholding** — the decision rule over ``g``
    (``thresholds.detection``).
-3. **The detection function** — the whole chain, which is what actually
+3. **Candidate selection** — the local maxima of ``g`` at or above the
+   threshold (:class:`CandidateSelector`).
+4. **Refractory suppression** — which candidates are *distinct*
+   activations (:class:`RefractorySuppressor`).
+5. **The detection function** — the whole chain
+   (:func:`detect_activation_train`, and :func:`detect_activation` for
+   the single-activation synthetic case), which is what actually
    answers "where are the activations?"
 
 Public surface, built up across SIG1; more lands in later steps.
@@ -22,6 +28,8 @@ Public surface, built up across SIG1; more lands in later steps.
 from __future__ import annotations
 
 from .base import DetectionPreprocessor
+from .candidates import ActivationCandidate, CandidateSelector, LocalMaximaSelector
+from .detection import TwoStageRefiner, detect_activation, detect_activation_train
 from .preprocessors import (
     DEFAULT_BOTTERON_BAND_HZ,
     DEFAULT_BOTTERON_LOWPASS_HZ,
@@ -29,12 +37,21 @@ from .preprocessors import (
     RectifiedDerivative,
     TeagerKaiser,
 )
+from .suppression import GreedyHeightSuppressor, RefractorySuppressor
 
 __all__ = [
     "DEFAULT_BOTTERON_BAND_HZ",
     "DEFAULT_BOTTERON_LOWPASS_HZ",
+    "ActivationCandidate",
     "BotteronEnvelope",
+    "CandidateSelector",
     "DetectionPreprocessor",
+    "GreedyHeightSuppressor",
+    "LocalMaximaSelector",
     "RectifiedDerivative",
+    "RefractorySuppressor",
     "TeagerKaiser",
+    "TwoStageRefiner",
+    "detect_activation",
+    "detect_activation_train",
 ]
