@@ -16,8 +16,8 @@ sentinel conventions) see
 [`project/architecture.md`](../project/architecture.md).
 
 > **Status: written incrementally.** Sections land as their code does,
-> alongside Phase-1.5 SIG1. §1–§3 are complete; §4–§5 arrive with the
-> steps named in their stubs. This doc is also the destination for the
+> alongside Phase-1.5 SIG1. §1–§4 are complete; §5 arrives with the
+> step named in its stub. This doc is also the destination for the
 > egm-signal math currently parked in `iafdb-pipeline/docs/theory.md`
 > §1.1–1.3 / §2.1 — the repo that owns a primitive owns its math — so
 > some sections graduate content rather than deriving it fresh.
@@ -25,7 +25,9 @@ sentinel conventions) see
 > **Rendering note.** Equations are LaTeX — `$$…$$` display, `$…$`
 > inline. GitHub and VS Code typeset these; a plain-text viewer shows
 > the source. Backticked names (`fs`, `sosfiltfilt`) are code
-> identifiers, not math symbols.
+> identifiers, not math symbols. A symbol rendered as a **link** jumps
+> to its entry in [Notation](#notation) — the first use in each section
+> is linked, so you never have to scroll up guessing.
 
 ## Table of contents
 
@@ -45,7 +47,11 @@ sentinel conventions) see
   - [3.3 Percentile threshold](#33-percentile-threshold)
   - [3.4 What the threshold is applied to](#34-what-the-threshold-is-applied-to)
   - [3.5 Candidate extraction, suppression, and the chain](#35-candidate-extraction-suppression-and-the-chain)
-- [4. Activation-complex bounds](#4-activation-complex-bounds) *(S5)*
+- [4. Activation-complex bounds](#4-activation-complex-bounds)
+  - [4.1 Onset, offset, and the durations](#41-onset-offset-and-the-durations)
+  - [4.2 Choosing theta](#42-choosing-theta)
+  - [4.3 Relationship to the above-tau segment](#43-relationship-to-the-above-tau-segment)
+  - [4.4 A study-time criterion, not a runtime filter](#44-a-study-time-criterion-not-a-runtime-filter)
 - [5. Anchor windowing](#5-anchor-windowing) *(S6)*
 - [6. References](#6-references)
 
@@ -57,71 +63,79 @@ that brings them.
 
 **Signal and indexing**
 
-- $x[i]$, $i = 0,\dots,n-1$ — one channel of bipolar EGM, $n$ samples at
+- <a id="sym-x"></a>$x[i]$, $i = 0,\dots,n-1$ — one channel of bipolar EGM, $n$ samples at
   sampling frequency $f_s$ Hz. **One channel**: every operator here is
   defined per-channel.
-- $f_\text{Nyq} = f_s/2$ — the Nyquist frequency.
-- $dV/dt$ — the signal's time derivative; $\lvert dV/dt\rvert$ its
+- <a id="sym-fnyq"></a>$f_\text{Nyq} = f_s/2$ — the Nyquist frequency.
+- <a id="sym-dvdt"></a>$dV/dt$ — the signal's time derivative; $\lvert dV/dt\rvert$ its
   magnitude, approximated by the first difference.
 
 **Filtering (§1)**
 
-- $H(\omega)$ — a filter's frequency response at angular frequency
+- <a id="sym-H"></a>$H(\omega)$ — a filter's frequency response at angular frequency
   $\omega$; $\overline{H(\omega)}$ its complex conjugate.
-- $H_\text{fb}(\omega)$ — the *forward-backward* (two-pass) response,
+- <a id="sym-Hfb"></a>$H_\text{fb}(\omega)$ — the *forward-backward* (two-pass) response,
   $\lvert H(\omega)\rvert^2$.
 - $\lvert H(f)\rvert^2$ — magnitude-squared response at frequency $f$.
-- $N$ — Butterworth filter order.
-- $f_c$ — a filter's cutoff (corner) frequency.
-- $f_\text{lo}$, $f_\text{hi}$ — band-pass lower and upper edges.
-- $\varepsilon$ — an arbitrarily small positive number, used only to
+- <a id="sym-N"></a>$N$ — Butterworth filter order.
+- <a id="sym-fc"></a>$f_c$ — a filter's cutoff (corner) frequency.
+- <a id="sym-band"></a>$f_\text{lo}$, $f_\text{hi}$ — band-pass lower and upper edges.
+- <a id="sym-eps"></a>$\varepsilon$ — an arbitrarily small positive number, used only to
   describe the degenerate band-pass we *reject* in §1.3.
-- $\mathrm{BP}_{40\text{–}250}$, $\mathrm{LP}_{20}$ — a band-pass and a
+- <a id="sym-filters"></a>$\mathrm{BP}_{40\text{–}250}$, $\mathrm{LP}_{20}$ — a band-pass and a
   low-pass, subscripted with their cutoffs in Hz.
 
 **Detection preprocessing (§2)**
 
-- $g$, $g[i]$ — the **detection curve**: a same-length transform of $x$
+- <a id="sym-g"></a>$g$, $g[i]$ — the **detection curve**: a same-length transform of $x$
   whose local maxima sit at activations.
-- $A$, $\Omega$, $\phi$ — amplitude, digital angular frequency and phase
+- <a id="sym-AOmega"></a>$A$, $\Omega$, $\phi$ — amplitude, digital angular frequency and phase
   of the test sinusoid used to derive what Teager–Kaiser measures
   (§2.2). $\Omega \ll 1$ denotes the low-frequency limit.
-- $t_a$ — an **activation time**, as a sample index.
-- $\arg\max$ — the index at which a curve attains its maximum.
+- <a id="sym-ta"></a>$t_a$ — an **activation time**, as a sample index.
+- <a id="sym-argmax"></a>$\arg\max$ — the index at which a curve attains its maximum.
 
 **Thresholding (§3)**
 
-- $\tau$ — the detection threshold. A **local maximum** of $g$ becomes a
+- <a id="sym-tau"></a>$\tau$ — the detection threshold. A **local maximum** of $g$ becomes a
   candidate when $g[i] \ge \tau$ (§3.4); it is not applied sample-wise.
-- $c$ — multiplier on the baseline median.
-- $\lambda$ — multiplier on the MAD.
-- $\operatorname{median}(\cdot)$ — the median.
-- $\operatorname{MAD}(g) = \operatorname{median}(\lvert g - \operatorname{median}(g)\rvert)$
+- <a id="sym-c"></a>$c$ — multiplier on the baseline median.
+- <a id="sym-lambda"></a>$\lambda$ — multiplier on the MAD.
+- <a id="sym-median"></a>$\operatorname{median}(\cdot)$ — the median.
+- <a id="sym-mad"></a>$\operatorname{MAD}(g) = \operatorname{median}(\lvert g - \operatorname{median}(g)\rvert)$
   — the median absolute deviation, a robust scale estimate in raw units.
-- $\sigma$ — the standard deviation, and $k$ its multiplier in the
+- <a id="sym-sigma"></a>$\sigma$ — the standard deviation, appearing in the
   mean-plus-$k\sigma$ rule we *reject* in §3.2.
-- $P_q(g)$ — the $q$-th percentile of $g$; $q \in (0, 100)$.
-- $+\infty$ — the fail-closed sentinel returned for an empty or constant
-  curve.
-- $\Delta_\text{refr}$ — the refractory interval, the minimum spacing
+- <a id="sym-k"></a>$k$ — the multiplier on $\sigma$ in the mean-plus-$k\sigma$ rule we
+  *reject* in §3.2. Used only there; the MAD multiplier everywhere else,
+  including the §4.2 boundary level, is $\lambda$, because both are the
+  same `MedianMadThreshold(c, lam)`.
+- <a id="sym-Pq"></a>$P_q(g)$ — the $q$-th percentile of $g$; $q \in (0, 100)$.
+- <a id="sym-refr"></a>$\Delta_\text{refr}$ — the refractory interval, the minimum spacing
   between distinct activations. *(§3.5, S4.)*
 
 **Complex bounds (§4, S5)**
 
-- $\theta$ — the envelope threshold at which onset and offset are read,
-  either a fraction of the local peak or a multiple of the baseline MAD.
-- $t_\text{on}$, $t_\text{off}$ — onset and offset sample indices.
-- $r_\text{rise} = t_a - t_\text{on}$,
+- <a id="sym-theta"></a>$\theta$ — the envelope threshold at which onset and offset are read,
+  either a fraction of the local peak or a level above the baseline MAD.
+- <a id="sym-f"></a>$f \in (0,1)$ — the peak fraction in
+  $\theta = f \cdot g[t_a]$.
+- <a id="sym-onoff"></a>$t_\text{on}$, $t_\text{off}$ — onset and offset sample indices.
+- <a id="sym-rise"></a>$r_\text{rise} = t_a - t_\text{on}$,
   $r_\text{fall} = t_\text{off} - t_a$ — the rising and falling
   durations of an activation complex.
+- <a id="sym-Wact"></a>$W_\text{act} = r_\text{rise} + r_\text{fall}$ — the total width of
+  an activation complex.
+- <a id="sym-radius"></a>$R_\text{before}$, $R_\text{after}$ — the per-side search radius
+  bounding the outward walk (§4.2).
 
 **Anchor windowing (§5, S6)**
 
-- $T$ — window length in samples.
-- $p \in [0,1]$ — the activation's fractional position within the
+- <a id="sym-T"></a>$T$ — window length in samples.
+- <a id="sym-p"></a>$p \in [0,1]$ — the activation's fractional position within the
   window; $0.0$ is the first sample, $1.0$ the last.
-- $s = \lfloor t_a - p\,(T-1) \rceil$ — the window's start sample.
-- $\lfloor\cdot\rceil$ — round to nearest integer.
+- <a id="sym-s"></a>$s = \lfloor t_a - p\,(T-1) \rceil$ — the window's start sample.
+- <a id="sym-round"></a>$\lfloor\cdot\rceil$ — round to nearest integer.
 
 **Conventions**
 
@@ -170,7 +184,7 @@ the boundaries.
 
 ### 1.2 Band-pass
 
-A Butterworth band-pass of order $N$ with edges $(f_\text{lo},
+A Butterworth band-pass of order [$N$](#sym-N) with edges $(f_\text{lo},
 f_\text{hi})$, realized as second-order sections. The Butterworth
 magnitude response is maximally flat in-band:
 
@@ -222,7 +236,7 @@ samples. This is the mechanism that makes a **fractionated** activation
 readable as one event: the raw rectified signal dips to near zero between
 sub-deflections, but if those dips are narrower than the averaging width
 they are filled in, and the smoothed curve stays above a threshold across
-the whole complex. Consequently $f_c$ is the knob that decides *how much
+the whole complex. Consequently [$f_c$](#sym-fc) is the knob that decides *how much
 fractionation counts as one activation* — lower merges more aggressively,
 at the cost of broadening the complex and pushing measured onset earlier
 and offset later (§4).
@@ -243,7 +257,7 @@ this project's own method spec:
 | stage | what it does | where |
 |---|---|---|
 | **Detection preprocessing** | transform $x \to g$ so activations are emphasised | §2.2–§2.4 |
-| **Detection thresholding** | the decision rule that turns $g$ into candidates | §3 |
+| **Detection thresholding** | the decision rule that turns [$g$](#sym-g) into candidates | §3 |
 | **The detection function** | the whole chain, including refractory suppression | §3 |
 
 A preprocessor **detects nothing**. It decides what "prominent" will
@@ -258,7 +272,7 @@ mean to the next stage, and that is all. Only the full chain answers
 ### The shared contract
 
 All three preprocessors guarantee: 1-D input; output length equal to
-input length (so an index into $g$ *is* an index into $x$); positions
+input length (so an index into [$g$](#sym-g) *is* an index into $x$); positions
 where the operator is undefined filled with $0.0$; and an all-zero
 result for input shorter than the operator needs. That last one is
 fail-closed — nothing crosses a positive threshold, so a degenerate
@@ -362,7 +376,7 @@ three-sample support, so it stays local.
 **Returned unclipped.** The operator can go negative where the signal is
 not locally narrowband (the derivation above assumes a single component).
 Many implementations clip at zero; this one does not, because clipping is
-a policy decision belonging to whatever consumes $g$, $\arg\max$ is
+a policy decision belonging to whatever consumes [$g$](#sym-g), $\arg\max$ is
 unaffected, and the median/MAD thresholds of §3 take the distribution of
 $g$ as it is. If you want a rectified variant, clip at the call site.
 
@@ -408,7 +422,7 @@ envelope rises before the first deflection and decays after the last, so
 measured onset is early and offset is late, by roughly the averaging
 width. The alternative design — threshold a lightly-smoothed curve, then
 *merge* segments closer than some gap — trades this bias for an extra
-parameter. We take the smoothing, because $f_c$ is one knob and the
+parameter. We take the smoothing, because [$f_c$](#sym-fc) is one knob and the
 envelope is needed anyway.
 
 > **Pinned by** `test_botteron_bridges_fractionation_where_the_derivative_does_not`
@@ -435,7 +449,7 @@ peak or several.
 | Botteron envelope | smoothed | 2 filter passes | highest | **merges** it | biased late on asymmetric complexes |
 
 All three **gate on amplitude**; only the envelope also **merges
-fractionation**, at the $g$ level, before any refractory logic runs.
+fractionation**, at the [$g$](#sym-g) level, before any refractory logic runs.
 
 **The method spec's defaults.** For the **IAFDB train** — real, noisy,
 fractionated — the **Botteron envelope**, because the smoothing
@@ -461,7 +475,7 @@ numbers.
 
 ## 3. Thresholding and the detection function
 
-Stage two: given the detection curve $g$, decide how prominent a sample
+Stage two: given the detection curve [$g$](#sym-g), decide how prominent a sample
 must be to count as a candidate. Stage three — refractory suppression,
 which turns candidates into an activation train — lands with S4.
 
@@ -483,11 +497,11 @@ $$
 \operatorname{MAD}(g) = \operatorname{median}\bigl(\lvert g - \operatorname{median}(g)\rvert\bigr).
 $$
 
-A robust analogue of "mean plus $k$ standard deviations": the median
-locates the baseline, the MAD measures its spread, $\lambda$ sets how far
+A robust analogue of "mean plus [$k$](#sym-k) standard deviations": the median
+locates the baseline, the MAD measures its spread, [$\lambda$](#sym-lambda) sets how far
 above it to sit.
 
-**Why MAD and not $\sigma$** — the load-bearing choice. The curve
+**Why MAD and not [$\sigma$](#sym-sigma)** — the load-bearing choice. The curve
 *contains the activations being detected*, and in it they are large
 outliers. The standard deviation has a **breakdown point of zero**: one
 arbitrarily large sample moves it arbitrarily far. So a $\sigma$-based
@@ -500,20 +514,20 @@ the baseline, which is what a detection threshold should reference.
 
 Measured on a 2000-sample curve, going from 5 activations to 200:
 
-| rule | $\tau$ at 5 | $\tau$ at 200 | drift |
+| rule | [$\tau$](#sym-tau) at 5 | $\tau$ at 200 | drift |
 |---|---|---|---|
 | $c\cdot\mathrm{median} + \lambda\cdot\mathrm{MAD}$ | 0.53 | 0.62 | **x1.16** |
 | $\mathrm{mean} + k\,\sigma$ | 12.7 | 79.9 | x6.3 |
 
 $\lambda$ is in **raw MAD units**. For Gaussian data
 $\sigma \approx 1.4826\,\mathrm{MAD}$, so multiply by that to read it as a
-sigma multiple. Neither $c$ nor $\lambda$ has a default: how aggressive
+sigma multiple. Neither [$c$](#sym-c) nor $\lambda$ has a default: how aggressive
 detection should be is a policy the calling pipeline owns.
 
 **$\mathrm{MAD} = 0$ is not an error.** It means over half the samples
 share one value — equally true of a dead channel *and* of a clean
 synthetic trace that is exactly flat between activations. The two are
-indistinguishable from $g$ alone, so it is deliberately not
+indistinguishable from [$g$](#sym-g) alone, so it is deliberately not
 special-cased: the formula degrades to $\tau = c\cdot\mathrm{median}(g)$,
 which for a zero baseline is $\tau = 0$. That is where the comparison
 convention earns its keep (§3.4).
@@ -545,18 +559,18 @@ far-field. A fractionated complex may contribute several candidates, and
 that is intended — deciding which are *distinct activations* is the
 refractory step's job (§3.5), on the time axis.
 
-**Why not one candidate per above-$\tau$ segment.** The tempting
+**Why not one candidate per above-[$\tau$](#sym-tau) segment.** The tempting
 simplification is to collapse each contiguous above-$\tau$ run to its
 single $\arg\max$. The method spec explicitly rules this out, and
 measurement shows why: it lets the *threshold* do the merging, so two
 genuine activations riding **one** above-$\tau$ run — common in fast AF,
 when the envelope never fully returns to baseline between beats —
-collapse into one peak, a silent miss that no $\Delta_\text{refr}$
+collapse into one peak, a silent miss that no [$\Delta_\text{refr}$](#sym-refr)
 tuning can recover.
 
 Measured, two genuine activations 80–90 ms apart:
 
-| $f_c$ (envelope) | above-$\tau$ segments | widest | segment-argmax | local maxima |
+| [$f_c$](#sym-fc) (envelope) | above-$\tau$ segments | widest | segment-argmax | local maxima |
 |---|---|---|---|---|
 | 20 Hz | 2 | 49 | 2 activations | 2 activations |
 | 10 Hz | 1 | **168** | **1 — one lost** | 2 activations |
@@ -564,7 +578,7 @@ Measured, two genuine activations 80–90 ms apart:
 
 With $\Delta_\text{refr} = 60$ samples, those runs span three to four
 refractory intervals. The above-$\tau$ segment *is* still used — it is
-the $W_\text{act}$ that §4 measures onset and offset within — just not
+the [$W_\text{act}$](#sym-Wact) that §4 measures onset and offset within — just not
 as the merge rule.
 
 **On $\ge$ versus $>$.** The comparison is at-or-above, matching the
@@ -578,9 +592,35 @@ extraction the two comparisons give **identical** results (verified: 8
 and 8 on that curve; 4 and 4 on a clean Gabor pulse). The comparison
 simply is not load-bearing here.
 
-Two degenerate curves never reach a rule at all, both returning
-$+\infty$ (fail-closed, matching the empty-pool sentinel convention): an
+Two degenerate curves never reach a rule at all, and both **raise**: an
 **empty** curve, and a **constant** one, which has no peaks to separate.
+
+They raise rather than returning a sentinel, and they raise *different*
+exceptions, for reasons worth stating because an earlier revision did
+neither. A sentinel $+\infty$ propagates: measured downstream, it made
+the §4 outward walk terminate on its first comparison and report a
+zero-width complex flagged as a **complete measurement** — indistinguishable
+from a genuine instantaneous one, and destined for the duration
+distribution the study rests on. Failing where the condition arises is
+the only version that stays visible.
+
+The two conditions are then separated because their causes are
+categorically different. An empty array is a **programming error** —
+nothing legitimately produces one, so it means a bad slice upstream. A
+constant array is a **data condition**: a dead or disconnected electrode
+records a flat line, and so does a channel clipped to a rail. Sweeping
+thousands of channels, the second is expected and should be caught,
+counted and skipped; the first should not be swallowed by that same
+handler.
+
+**Known limitation — this test is whole-array only.** A channel that
+flatlines *intermittently*, dropping out for a few seconds mid-record,
+passes it. Every threshold computed from such a trace is then biased by
+the dead stretch, silently: the median and the MAD are both pulled toward
+the flat value in proportion to how much of the record it occupies, which
+*lowers* $\tau$ and admits noise elsewhere in the trace. Detecting bad
+*sections* needs a segment-wise analysis this library does not yet do,
+and the case has not been characterised on IAFDB.
 
 > **Implementation** — `thresholds/detection.py`; ABC in
 > `thresholds/base.py`; candidate extraction in
@@ -601,8 +641,8 @@ $+\infty$ (fail-closed, matching the empty-pool sentinel convention): an
 The last two stages, and then the composition that is the detection
 function.
 
-**Candidate selection.** A candidate is a local maximum of $g$ at or
-above $\tau$ (§3.4), filtered by a minimum **prominence** — how far a
+**Candidate selection.** A candidate is a local maximum of [$g$](#sym-g) at or
+above [$\tau$](#sym-tau) (§3.4), filtered by a minimum **prominence** — how far a
 peak rises above the higher of the two saddles bounding it.
 
 Prominence is the only candidate filter. An earlier implementation also
@@ -617,7 +657,7 @@ The prominence filter is optional in the signature and **effectively
 required in practice**. An adaptive threshold sitting a few MAD above a
 quiet baseline is low in absolute terms, so filter ringing around a
 strong activation and ordinary noise bumps both clear it, and — being
-spaced further apart than $\Delta_\text{refr}$ — suppression keeps them.
+spaced further apart than [$\Delta_\text{refr}$](#sym-refr) — suppression keeps them.
 Measured on one fractionated complex with realistic noise:
 
 | preprocessor | no prominence floor | floor at $0.2\max g$ |
@@ -684,10 +724,152 @@ either silently changes the activation count.
 
 ## 4. Activation-complex bounds
 
-*Lands with S5.* Will cover: onset/offset as outward threshold crossings
-on the envelope, the choice of $\theta$ (fraction-of-peak vs a multiple
-of baseline MAD), the resulting rise/fall durations, and the smoothing
-bias inherited from §1.3.
+An activation is not an instant but a *complex* — a rise, a peak, a fall
+— and a fibrotic one is longer, with a trailing fractionated tail. This
+section measures that extent, because the windowing margins in §5 are
+chosen from its distribution.
+
+### 4.1 Onset, offset, and the durations
+
+Walk outward from the detected activation until the curve drops below a
+boundary level [$\theta$](#sym-theta):
+
+$$
+t_\text{on} = \max\{\, i < t_a : g[i] < \theta \,\}, \qquad
+t_\text{off} = \min\{\, i > t_a : g[i] < \theta \,\},
+$$
+
+$$
+r_\text{rise} = t_a - t_\text{on}, \qquad
+r_\text{fall} = t_\text{off} - t_a, \qquad
+W_\text{act} = r_\text{rise} + r_\text{fall}.
+$$
+
+**The curve must be the smoothed one.** On a sharp [$g$](#sym-g) a fractionated
+complex dips below $\theta$ *between* its deflections, so the walk stops
+at the first dip and measures one deflection rather than the complex.
+The envelope's low-pass bridges those dips — the same mechanism as
+§1.3 — which is what makes the measurement meaningful at all. Pinned by
+a test comparing the two.
+
+**Fibrotic complexes are asymmetric**, with $r_\text{fall} \gg
+r_\text{rise}$, which is why the method spec calls for a *healthier back
+margin* than front margin when the fallback fixed margins are used.
+
+### 4.2 Choosing $\theta$
+
+Two forms, answering different questions:
+
+- **Fraction of the local peak**, $\theta = f \cdot g[t_a]$. Scales with
+  each complex individually, so a low-voltage fibrotic activation is
+  measured against its own amplitude rather than the record's largest —
+  usually right when comparing complex *shapes* across a corpus whose
+  amplitudes vary.
+- **Above the noise floor**, $\theta = \operatorname{median}(g) +
+  \lambda\,\operatorname{MAD}(g)$. Answers "where does this stop being
+  distinguishable from baseline?", and is robust for the same reason the
+  detection threshold is (§3.2).
+
+The spec phrases the second as "a small multiple of the baseline-noise
+MAD". The median is added deliberately: a MAD multiple alone is a
+*spread*, not a level, and on a curve whose baseline sits above zero it
+would fall beneath the noise floor.
+
+**The second form is literally §3.2's rule** — it is
+$\tau = c\operatorname{median}(g) + \lambda\operatorname{MAD}(g)$ with
+$c = 1$, and the code uses that one class rather than restating the
+arithmetic. This is the clearest case for why the threshold families are
+named after *how much context they need* rather than what they are used
+for: the same computation serves detection and boundary measurement, so
+a type called "detection threshold" would have been a lie in one of the
+two places. What genuinely differs is that the peak-fraction form cannot
+be evaluated without knowing **which** peak, and the median/MAD form has
+no use for that argument — so they are separate interfaces, and a caller
+accepting either distinguishes them with one `isinstance`.
+
+**Which matters, because [$\theta$](#sym-theta) below the noise floor never
+terminates.** The walk continues until it happens to dip — in practice,
+until it reaches a neighbouring activation. Measured on a
+four-activation train with realistic noise:
+
+| $\theta$ | vs baseline median | measured width |
+|---|---|---|
+| $0.02 \cdot g[t_a]$, no noise | above | 54 samples |
+| $0.02 \cdot g[t_a]$, noise 0.02 | **below** | **597 samples** — reaches past the previous activation |
+| $\operatorname{median} + 3\operatorname{MAD}$, noise 0.02 | above by construction | terminates normally |
+
+Hence two safeguards: an optional **search radius** bounding the walk,
+and a **clamped** flag on each side recording whether it terminated on a
+genuine crossing or merely ran out of room. A clamped side is not a
+measurement, and pooling it into a duration distribution would bias
+exactly the long tail the study exists to characterise.
+
+The radius may be set **per side**, and for this measurement that is the
+form that fits the phenomenon. §4.1 defines $r_\text{rise}$ and
+$r_\text{fall}$ separately precisely because a fibrotic complex is
+*asymmetric* — the fractionated tail makes the falling side the long one.
+A single symmetric radius must therefore be set wide enough for that
+tail, which simultaneously licenses the backward walk to run just as far
+toward the **previous** activation, where no such length is expected. Two
+radii let the forward side stay generous while the backward side stays
+tight, so the safeguard bounds the direction that actually runs away:
+
+$$
+t_\text{on} \ge t_a - R_\text{before},
+\qquad
+t_\text{off} \le t_a + R_\text{after}.
+$$
+
+A reasonable starting point is $R_\text{before}$ a little under the
+refractory interval and $R_\text{after}$ larger, sized from the
+$r_\text{fall}$ distribution the study is measuring — which makes the
+choice mildly circular on the first pass, so start loose and tighten.
+
+### 4.3 Relationship to the above-$\tau$ segment
+
+Candidate selection (§3.5) already reports the contiguous above-[$\tau$](#sym-tau)
+run containing each peak. That is *a* notion of complex width; this is a
+finer one, and **neither bounds the other**, because [$\theta$](#sym-theta) may sit
+either side of $\tau$. Measured with $\tau = \operatorname{median} + 4
+\operatorname{MAD}$:
+
+| $\theta$ | vs $\tau$ | complex vs segment |
+|---|---|---|
+| $0.50 \cdot g[t_a]$ | above | inside the segment |
+| $0.25 \cdot g[t_a]$ | above | inside the segment |
+| $0.10 \cdot g[t_a]$ | **below** | **extends beyond** it |
+
+So the segment is a reference, not a bounding box.
+
+### 4.4 A study-time criterion, not a runtime filter
+
+This measures [$r_\text{rise}$](#sym-rise) and [$r_\text{fall}$](#sym-rise) across a corpus so
+that §8.1 can choose an activation-position range where complexes are
+almost never clipped:
+
+$$
+p \in \left[\, r_\text{rise}/T,\; 1 - r_\text{fall}/T \,\right].
+$$
+
+Once that range is chosen the bound stops binding, so the splitter does
+**not** re-test each window. That is deliberate: multi-beat work in a
+later phase will *want* a fraction of edge-clipped windows so the model
+learns that case, making a hard clip filter counterproductive.
+
+The spec is also candid that this may not survive contact with real AF
+electrograms, where clean rise/fall boundaries often do not exist. The
+documented fallback is fixed **generous asymmetric margins** — a healthy
+front, a healthier back — with this measurement's job being to *inform*
+those margins rather than to run per window.
+
+> **Implementation** — `extraction/activation_based/complex_bounds.py`.
+> **Pinned by** `tests/test_complex_bounds.py`, including the runaway
+> walk, the sharp-versus-smoothed comparison, and the clamped-boundary
+> reporting.
+> **Source** — [Hodges & Bui 1996](https://pubmed.ncbi.nlm.nih.gov/9020824/)
+> for threshold-on-smoothed-rectified onset detection and its
+> smoothing-induced bias; open-access re-derivation in the
+> [EMG-onset review](https://pmc.ncbi.nlm.nih.gov/articles/PMC10594734/).
 
 ## 5. Anchor windowing
 

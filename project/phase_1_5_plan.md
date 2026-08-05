@@ -2,7 +2,7 @@
 
 **Repo:** egm-signal · **Phase:** 1.5
 **Phase design doc:** `intracardiac-platform/phases/phase_1_5/design.md`
-**Status:** in progress · **Progress:** 5/11 steps done (S0 ✅ · S1 ✅ · S2 ✅ · S3 ✅ · S4 ✅)
+**Status:** in progress · **Progress:** 6/11 steps done (S0 ✅ · S1 ✅ · S2 ✅ · S3 ✅ · S4 ✅ · S5 ✅)
 
 **Release model (corrected 2026-08-01, Daniel).** Supersedes S0's "ships alone as v0.3.0 ahead of
 SIG1": egm-signal appears **once** in the Wave-1 order, so **all** of this plan's code lands before a
@@ -61,7 +61,7 @@ S9.
   would have nowhere to put the Botteron cutoffs.
 
 - **The detection threshold is a third threshold family.** *(Built at S3; the plan originally said
-  "Protocol" — it shipped as an **ABC**, `DetectionThreshold`, per the S2 review rule.)* `τ` is a
+  "Protocol" — it shipped as an **ABC**, `DetectionThreshold`, per the S2 review rule; renamed `SignalThreshold` at the S5 review.)* `τ` is a
   threshold on the detection curve `g`, not on pooled peak-to-peak, so it gets its own interface in
   `thresholds/base.py` with concretes in `thresholds/detection.py`, alongside the existing keep-above /
   keep-below pair. Same reasoning the architecture doc gives for keeping two hierarchies: **the type
@@ -308,7 +308,7 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
 
 ### S3 — Detection-threshold strategies ✅ (0.5–1.5 h)
 - **Done 2026-08-02.** `thresholds/detection.py` — `MedianMadThreshold` (`τ = c·median(g) + λ·MAD(g)`)
-  and `PercentileDetectionThreshold`, plus the `median_absolute_deviation` helper; `DetectionThreshold`
+  and `PercentileDetectionThreshold` *(both renamed at the S5 review)*, plus the `median_absolute_deviation` helper; `DetectionThreshold`
   **ABC** in `thresholds/base.py` alongside the two existing Protocols. 27 tests, 145 total, gate green.
   Theory §3 written (3.1–3.4) with Hampel 1974 + Leys 2013, both Crossref-verified.
 - **ABC here too, and the base doc now states the rule:** Protocol where *another repo's* type must
@@ -316,7 +316,7 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   ABC where we ship and extend the family in-repo and there is shared behavior worth enforcing. The
   degenerate-input handling is exactly that. The two older Protocol families are deliberately left
   alone — changing them would break the documented "define your own strategy" story.
-- **Naming:** only `PercentileDetectionThreshold` is qualified, because `healthy.py` already owns
+- **Naming:** only `PercentileSignalThreshold` is qualified, because `healthy.py` already owns
   `PercentileThreshold` and everything is re-exported flat from the package root. `MedianMadThreshold`
   has no clash, so qualifying it would be noise.
 - **No default `c` / `λ` / `q`** — how aggressive detection is, is policy the calling pipeline owns
@@ -475,7 +475,7 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
      removes the invalid combination of a refiner with no radius. A plain class, not an ABC — the spec
      describes one refinement rule, not a family.
 
-### S5 — Activation-complex bounds (onset / offset) ☐ (1.5–3 h)
+### S5 — Activation-complex bounds (onset / offset) ✅ (1.5–3 h)
 - **Change:** `extraction/activation_based/complex_bounds.py` — `ActivationComplex` frozen dataclass
   (`onset_sample`, `activation_sample`, `offset_sample`, `rise_samples`, `fall_samples`) +
   `activation_bounds(g, t_a, *, theta)` walking outward from `t_a` to the last sub-θ sample before
@@ -498,7 +498,70 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   reliably on real AF signal, the answer is *not* to force them — fall back to fixed **generous
   asymmetric margins** (healthy front, healthier back, for the long fibrotic tail). Worth surfacing in
   the docstring so a caller reads it as "informs margins", not "gates windows".
-- **Depends on:** S2, S4 (segment extents).
+- **Depends on:** S2, S4.
+- **Done 2026-08-04.** `complex_bounds.py` — `ActivationComplex` (onset/offset/rise/fall/width plus
+  per-side **clamped** flags), ~~a `BoundaryLevel` ABC with `PeakFractionLevel` and `BaselineMadLevel`~~,
+  and `measure_complex` / `measure_complexes`. Theory §4 written.
+- **S5 review, 2026-08-05 — three changes plus a threshold-family restructure.** 204 tests, gate green.
+  1. `ActivationComplex.level` → `theta`, and the `level=` parameter → `boundary_threshold=`. The
+     ambiguity was a *collision*: a parameter holding a rule object and a field holding a float shared
+     one name.
+  2. `search_radius_samples` accepts a `(before, after)` tuple. Symmetric was the wrong shape for the
+     phenomenon — §4.1 splits `r_rise` from `r_fall` precisely because fibrotic complexes are
+     asymmetric, so one cap sized for the tail also licenses the backward walk to run just as far.
+  3. **`BoundaryLevel` and `BaselineMadLevel` deleted.** `BaselineMadLevel(k)` was exactly
+     `MedianMadThreshold(c=1, lam=k)` — the same arithmetic written twice.
+- **Threshold families are now split by context needed, not by use.** `DetectionThreshold` →
+  `SignalThreshold` (whole array) plus a **sibling** `PositionAwareSignalThreshold` (array + index);
+  `PercentileDetectionThreshold` → `PercentileSignalThreshold`; `PeakFractionLevel` →
+  `PeakFractionThreshold`, moved into `thresholds/detection.py`. Naming a type after its *use* was the
+  original error — a median/MAD rule is the same computation whether it decides "is this an activation?"
+  or "where does this complex end?", so `DetectionThreshold` was a lie in the second case. Siblings
+  rather than parent/child because a subclass that *requires* an argument the base lacks breaks Liskov.
+  A `SignalThresholdLike` alias covers callers accepting either. **A dispatch helper was considered and
+  rejected** — one caller, an unsubtle check; revisit at a second consumer or when
+  `RangeAwareSignalThreshold` lands. All of this was free now and breaking after the tag: none of these
+  names are in `v0.2.0`.
+- **The `+inf` sentinel is gone; degenerate signals raise.** New `exceptions.py`:
+  `EmptySignalError` (a programming error — nothing legitimately produces a zero-length array) and
+  `ConstantSignalError` (a *data* condition — dead electrode, or a channel clipped to a rail), under a
+  shared `DegenerateSignalError(ValueError)` so a batch caller can catch the pair or distinguish them.
+  The sentinel was not merely inelegant, it was wrong: measured, a `+inf` θ made the §4 walk terminate
+  immediately and report `width=0, is_complete=True, clamped=False` — a fabricated complex flagged as a
+  genuine measurement, headed for the §8.1 duration distribution. Divergence from the pooled-amplitude
+  empty-pool sentinel is deliberate: an empty *pool* is a legitimate filtering outcome, an empty
+  *signal* is not. Knock-on: `detect_activation_train` on a flat channel now raises instead of returning
+  an empty array — which is right, since an empty array could not be distinguished from a healthy
+  channel that simply had no activations in the window.
+- **Known limitation, recorded not fixed:** the constancy test is **whole-array**. A channel that
+  flatlines *intermittently* passes it, and every threshold from that trace is then silently biased —
+  median and MAD both pull toward the flat value, lowering `τ` and admitting noise elsewhere. Detecting
+  bad *sections* needs segment-wise analysis this library does not do, and the case has not been
+  characterised on IAFDB. Theory §3.1 + `exceptions.py`; raised to the fleet backlog (CL-124).
+- **Correction to this plan's own premise: S4's segment is *not* a bounding box.** The plan said S5
+  "consumes S4's segment extents". Measured: `θ` may sit either side of `τ`, so at `θ = 0.10·peak` the
+  complex **extends beyond** the above-`τ` segment (471–526 vs segment 474–524), while at 0.25 and 0.50
+  it sits inside. So the segment is a *reference*, not a bound, and `measure_complex` works against the
+  curve rather than being confined to the segment. Recorded in the module docstring and theory §4.3.
+- **The runaway walk, and the condition that causes it.** An outward walk with no bound can run into a
+  neighbouring activation. Measured on a four-activation train: at `θ = 0.02·peak` **with realistic
+  noise**, the "complex" spans 597 samples and reaches past the previous activation — because `θ` falls
+  **below the noise floor**, so the curve never dips under it between beats. Without noise the same
+  fraction sits above the floor and behaves normally. Hence an optional `search_radius_samples`, and a
+  test pinning both the runaway and the counterpart (a median/MAD level, defined relative to the floor,
+  cannot fall beneath it).
+- **`clamped` flags are the load-bearing detail.** A side that ran out of room — array edge or search
+  radius — is *not a measurement*. Since §8.1 pools these to characterise the long tail of `r_fall`,
+  silently including clamped sides would bias exactly the statistic the study exists to produce.
+  Reported per side, with `is_complete` to filter.
+- **The baseline level is `median + λ·MAD`, not `λ·MAD`.** The spec says "a small multiple of the
+  baseline-noise MAD", but a MAD multiple alone is a *spread*, not a level: on a curve with a raised
+  baseline it sits below the noise floor and the walk never terminates. Adding the median makes it a
+  level above the baseline, which is what the phrase means operationally — and, once written that way,
+  it *is* `MedianMadThreshold(c=1, lam=λ)`, which is how the duplicate came to light.
+- **Scope held to the spec:** this is a study-time instrument. No clip-filter is added here or in S6 —
+  the spec notes later multi-beat work will *want* some edge-clipped windows. The practical fallback
+  (fixed generous asymmetric margins when boundaries can't be measured on real AF) is documented.
 
 ### S6 — Anchor windowing + predicates ☐ (1–2 h)
 - **Change:** `extraction/activation_based/anchoring.py` — `AnchoredWindow` frozen dataclass
