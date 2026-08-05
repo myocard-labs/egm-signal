@@ -11,6 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from myocard_egm_signal.exceptions import ConstantSignalError
 from myocard_egm_signal.extraction.activation_based import (
     ActivationCandidate,
     BotteronEnvelope,
@@ -325,15 +326,22 @@ def test_train_finds_every_activation_at_the_right_time() -> None:
     assert np.all(np.abs(times - np.array(centres)) <= 5)
 
 
-def test_train_is_empty_on_a_flat_channel() -> None:
-    times = detect_activation_train(
-        np.zeros(1000),
-        preprocessor=BotteronEnvelope(fs=FS),
-        threshold=MedianMadThreshold(c=1.0, lam=4.0),
-        selector=_unfiltered(),
-        suppressor=GreedyHeightSuppressor(refractory_interval_samples=REFRACTORY),
-    )
-    assert times.size == 0
+def test_a_flat_channel_raises_rather_than_returning_an_empty_train() -> None:
+    """A dead electrode is reported, not silently answered.
+
+    This previously returned an empty array, which is indistinguishable
+    from "a healthy channel with no activations in this window" — and the
+    two need opposite handling: one is a channel to exclude from the
+    study, the other is ordinary data. A caller sweeping a record catches
+    ConstantSignalError, counts the dead channel, and moves on."""
+    with pytest.raises(ConstantSignalError):
+        detect_activation_train(
+            np.zeros(1000),
+            preprocessor=BotteronEnvelope(fs=FS),
+            threshold=MedianMadThreshold(c=1.0, lam=4.0),
+            selector=_unfiltered(),
+            suppressor=GreedyHeightSuppressor(refractory_interval_samples=REFRACTORY),
+        )
 
 
 def test_no_suppressor_means_no_suppression() -> None:

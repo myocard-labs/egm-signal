@@ -12,17 +12,22 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from myocard_egm_signal.exceptions import (
+    ConstantSignalError,
+    DegenerateSignalError,
+    EmptySignalError,
+)
 from myocard_egm_signal.extraction.activation_based import RectifiedDerivative
 from myocard_egm_signal.thresholds import (
-    DetectionThreshold,
     MedianMadThreshold,
-    PercentileDetectionThreshold,
+    PercentileSignalThreshold,
+    SignalThreshold,
     median_absolute_deviation,
 )
 
-ALL_RULES: list[DetectionThreshold] = [
+ALL_RULES: list[SignalThreshold] = [
     MedianMadThreshold(c=1.0, lam=5.0),
-    PercentileDetectionThreshold(q=99.0),
+    PercentileSignalThreshold(q=99.0),
 ]
 
 
@@ -65,30 +70,55 @@ def test_mad_ignores_outliers_where_std_does_not() -> None:
 
 
 @pytest.mark.parametrize("rule", ALL_RULES, ids=lambda r: r.name)
-def test_empty_curve_fails_closed(rule: DetectionThreshold) -> None:
-    """Nothing to detect, so admit nothing."""
-    assert rule.compute_threshold(np.empty(0)) == float("inf")
+def test_empty_curve_raises(rule: SignalThreshold) -> None:
+    """A programming error, not a data condition. Nothing in the pipeline
+    legitimately produces a zero-length array — it means a bad slice or a
+    bad index range upstream — so it should be loud."""
+    with pytest.raises(EmptySignalError):
+        rule.compute_threshold(np.empty(0))
 
 
 @pytest.mark.parametrize("rule", ALL_RULES, ids=lambda r: r.name)
 @pytest.mark.parametrize("value", [0.0, 5.0, -3.0])
-def test_constant_curve_fails_closed(rule: DetectionThreshold, value: float) -> None:
-    """A constant curve has no peaks. Any finite threshold would admit
-    either everything or nothing, and admitting everything is the
-    dangerous direction — a dead channel would yield an activation at
-    every sample."""
-    assert rule.compute_threshold(np.full(200, value)) == float("inf")
+def test_constant_curve_raises(rule: SignalThreshold, value: float) -> None:
+    """A constant curve has no peaks, so no threshold value is meaningful.
+
+    This previously returned ``+inf`` as a fail-closed sentinel. The
+    sentinel was the problem: it propagated. Downstream it produced a
+    zero-width activation complex flagged as a *complete* measurement,
+    which would then be pooled into a duration distribution. Raising
+    keeps the condition where it happened.
+
+    Non-zero values matter here — a channel saturated against a rail is
+    as flat as a dead one, and neither is a zero array."""
+    with pytest.raises(ConstantSignalError):
+        rule.compute_threshold(np.full(200, value))
 
 
 @pytest.mark.parametrize("rule", ALL_RULES, ids=lambda r: r.name)
-def test_rejects_multichannel_input(rule: DetectionThreshold) -> None:
+def test_degenerate_causes_are_separable_and_jointly_catchable(rule: SignalThreshold) -> None:
+    """Batch callers need to tell a bug from bad data.
+
+    A corpus sweep should catch ConstantSignalError, count the dead
+    channel and continue; an EmptySignalError in the same sweep is a bug
+    in the caller and should not be swallowed by the same handler. Both
+    remain ValueError so pre-existing broad handlers keep working."""
+    with pytest.raises(DegenerateSignalError):
+        rule.compute_threshold(np.zeros(10))
+    assert not issubclass(ConstantSignalError, EmptySignalError)
+    assert not issubclass(EmptySignalError, ConstantSignalError)
+    assert issubclass(DegenerateSignalError, ValueError)
+
+
+@pytest.mark.parametrize("rule", ALL_RULES, ids=lambda r: r.name)
+def test_rejects_multichannel_input(rule: SignalThreshold) -> None:
     """A detection curve is one channel."""
     with pytest.raises(ValueError, match="1-D"):
         rule.compute_threshold(np.zeros((100, 4)))
 
 
 @pytest.mark.parametrize("rule", ALL_RULES, ids=lambda r: r.name)
-def test_adapts_to_curve_scale(rule: DetectionThreshold) -> None:
+def test_adapts_to_curve_scale(rule: SignalThreshold) -> None:
     """Scaling the curve scales the threshold with it — that is what
     makes one configuration usable across records and patients whose
     amplitudes differ by an order of magnitude."""
@@ -101,7 +131,7 @@ def test_adapts_to_curve_scale(rule: DetectionThreshold) -> None:
 
 
 @pytest.mark.parametrize("rule", ALL_RULES, ids=lambda r: r.name)
-def test_separates_spikes_from_baseline(rule: DetectionThreshold) -> None:
+def test_separates_spikes_from_baseline(rule: SignalThreshold) -> None:
     """The point of the exercise: every activation must clear the level
     and almost nothing else should.
 
@@ -122,23 +152,26 @@ def test_subclass_must_declare_a_name() -> None:
     """Same structural enforcement as the preprocessors."""
     with pytest.raises(TypeError, match="must define a class-level `name`"):
 
-        class Unnamed(DetectionThreshold):
+        class Unnamed(SignalThreshold):
             def _compute_threshold(self, detection_curve: np.ndarray) -> float:
                 return 0.0
 
 
 def test_degenerate_rules_are_applied_before_the_subclass() -> None:
-    """A new rule inherits the fail-closed handling; its own code is
-    never even reached for empty or constant input."""
+    """A new rule inherits the degenerate-input handling; its own code is
+    never reached for empty or constant input, so an author cannot forget
+    to re-derive it."""
 
-    class Careless(DetectionThreshold):
+    class Careless(SignalThreshold):
         name = "careless"
 
         def _compute_threshold(self, detection_curve: np.ndarray) -> float:
             raise AssertionError("should not be reached for degenerate input")
 
-    assert Careless().compute_threshold(np.empty(0)) == float("inf")
-    assert Careless().compute_threshold(np.zeros(50)) == float("inf")
+    with pytest.raises(EmptySignalError):
+        Careless().compute_threshold(np.empty(0))
+    with pytest.raises(ConstantSignalError):
+        Careless().compute_threshold(np.zeros(50))
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +228,7 @@ def test_median_mad_on_a_clean_sparse_curve_still_detects() -> None:
     tau = MedianMadThreshold(c=1.0, lam=5.0).compute_threshold(g)
     assert np.isfinite(tau)
     assert tau == 0.0
-    # The threshold gates LOCAL MAXIMA, not samples (see DetectionThreshold).
+    # The threshold gates LOCAL MAXIMA, not samples (see SignalThreshold).
     # A flat baseline has no strict local maximum, so `>=` and `>` agree —
     # both admit exactly the 8 deflections. Applied sample-wise they would
     # not: `>=` would take all 1000. That difference is why extraction, not
@@ -264,7 +297,7 @@ def test_median_mad_requires_both_constants() -> None:
 
 
 # ---------------------------------------------------------------------------
-# PercentileDetectionThreshold
+# PercentileSignalThreshold
 # ---------------------------------------------------------------------------
 
 
@@ -272,7 +305,7 @@ def test_percentile_fixes_the_candidate_rate() -> None:
     """q = 99 admits at most 1% of samples, whatever the curve's shape."""
     rng = np.random.default_rng(4)
     g = np.abs(rng.normal(size=10_000))
-    tau = PercentileDetectionThreshold(q=99.0).compute_threshold(g)
+    tau = PercentileSignalThreshold(q=99.0).compute_threshold(g)
     assert int(np.sum(g >= tau)) == pytest.approx(100, rel=0.2)
 
 
@@ -282,7 +315,7 @@ def test_percentile_always_promotes_something() -> None:
     not a production splitter."""
     rng = np.random.default_rng(5)
     pure_noise = np.abs(rng.normal(scale=0.01, size=5000))
-    tau = PercentileDetectionThreshold(q=99.0).compute_threshold(pure_noise)
+    tau = PercentileSignalThreshold(q=99.0).compute_threshold(pure_noise)
     assert np.isfinite(tau)
     assert int(np.sum(pure_noise >= tau)) > 0
 
@@ -290,4 +323,4 @@ def test_percentile_always_promotes_something() -> None:
 def test_percentile_rejects_out_of_range_q() -> None:
     for bad in (0.0, 100.0, -5.0, 150.0):
         with pytest.raises(ValueError, match=r"q must be in \(0, 100\)"):
-            PercentileDetectionThreshold(q=bad)
+            PercentileSignalThreshold(q=bad)

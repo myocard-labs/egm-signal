@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ...thresholds.base import DetectionThreshold
+from ...thresholds.base import SignalThreshold
 from .base import DetectionPreprocessor
 from .candidates import CandidateSelector
 from .suppression import RefractorySuppressor
@@ -126,7 +126,7 @@ def detect_activation_train(
     signal: np.ndarray,
     *,
     preprocessor: DetectionPreprocessor,
-    threshold: DetectionThreshold,
+    threshold: SignalThreshold,
     selector: CandidateSelector,
     suppressor: RefractorySuppressor | None,
     refiner: TwoStageRefiner | None = None,

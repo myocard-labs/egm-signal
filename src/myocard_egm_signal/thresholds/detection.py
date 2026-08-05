@@ -1,25 +1,35 @@
-"""Threshold rules over a detection curve.
+"""Threshold rules over a 1-D signal.
 
-Two strategies, both adaptive — they read their level off the curve
+Three strategies, all adaptive — they read their level off the signal
 they are given, so the same configuration works across records,
 channels and patients whose amplitudes differ by an order of magnitude:
 
 - :class:`MedianMadThreshold` — ``c * median(g) + lam * MAD(g)``. The
   default, and the one the method spec specifies.
-- :class:`PercentileDetectionThreshold` — a high percentile of ``g``.
+- :class:`PercentileSignalThreshold` — a high percentile of ``g``.
   Simpler, and useful when you want to fix the *rate* of candidates
   rather than their prominence.
+- :class:`PeakFractionThreshold` — ``fraction * g[position]``, the only
+  one of the three that needs to know *where* it is being asked.
 
-Only the second name is qualified with "Detection". Everything in this
-package is re-exported flat from the package root, and ``healthy.py``
-already owns ``PercentileThreshold`` — so that one needs
-disambiguating and ``MedianMadThreshold`` does not. Qualifying a name
-that has no clash would be noise.
+The first two are :class:`~.base.SignalThreshold`; the third is a
+:class:`~.base.PositionAwareSignalThreshold`. Nothing here is
+detection-specific despite the module name — the same median/MAD rule
+serves as the detection threshold ``tau`` and as the complex-boundary
+level ``theta`` (§4). What distinguishes the classes is how much
+context each needs, not what a caller does with the answer.
 
-Neither ships default constants. The multipliers decide how aggressive
-detection is, which is a policy question belonging to the pipeline that
-knows its data — not to a library (the same rule that removed the
-calibration target's default). Study §8.1 sets them for this project.
+Only :class:`PercentileSignalThreshold` carries a qualifier in its name.
+Everything in this package is re-exported flat from the package root and
+``healthy.py`` already owns ``PercentileThreshold``, so that one needs
+disambiguating and the others do not. Qualifying a name with no clash
+would be noise.
+
+None of them ship default constants. The multipliers decide how
+aggressive detection is, which is a policy question belonging to the
+pipeline that knows its data — not to a library (the same rule that
+removed the calibration target's default). Study §8.1 sets them for
+this project.
 
 Math + primary sources: [`docs/theory.md`](../../../docs/theory.md) §3.
 """
@@ -30,7 +40,7 @@ from typing import ClassVar
 
 import numpy as np
 
-from .base import DetectionThreshold
+from .base import PositionAwareSignalThreshold, SignalThreshold
 
 
 def median_absolute_deviation(values: np.ndarray) -> float:
@@ -44,12 +54,21 @@ def median_absolute_deviation(values: np.ndarray) -> float:
     return float(np.median(np.abs(values - med)))
 
 
-class MedianMadThreshold(DetectionThreshold):
+class MedianMadThreshold(SignalThreshold):
     """``tau = c * median(g) + lam * MAD(g)``.
 
     A robust analogue of "mean plus k standard deviations": locate the
     curve's baseline with the median, measure its spread with the median
     absolute deviation, and sit a configurable distance above it.
+
+    Serves both roles this package needs a global level for. As a
+    detection threshold it is ``tau``. As a complex-boundary level
+    (§4.2) it is ``theta`` with ``c = 1``, which the method spec
+    describes as "a small multiple of the baseline-noise MAD" — the
+    median term is what makes that phrase a *level* rather than a bare
+    spread, since a MAD multiple alone would sit below the noise floor
+    on any curve whose baseline is above zero, and the outward walk
+    would never terminate.
 
     Why MAD rather than standard deviation
     --------------------------------------
@@ -117,7 +136,7 @@ class MedianMadThreshold(DetectionThreshold):
         return f"MedianMadThreshold(c={self.c}, lam={self.lam})"
 
 
-class PercentileDetectionThreshold(DetectionThreshold):
+class PercentileSignalThreshold(SignalThreshold):
     """``tau = percentile(g, q)`` — fix the candidate *rate*.
 
     Where :class:`MedianMadThreshold` asks "how prominent must a sample
@@ -138,7 +157,7 @@ class PercentileDetectionThreshold(DetectionThreshold):
         Percentile in ``(0, 100)``. Required.
     """
 
-    name: ClassVar[str] = "percentile_detection"
+    name: ClassVar[str] = "percentile_signal"
 
     def __init__(self, q: float) -> None:
         if not 0 < q < 100:
@@ -149,4 +168,44 @@ class PercentileDetectionThreshold(DetectionThreshold):
         return float(np.percentile(detection_curve, self.q))
 
     def __repr__(self) -> str:
-        return f"PercentileDetectionThreshold(q={self.q})"
+        return f"PercentileSignalThreshold(q={self.q})"
+
+
+class PeakFractionThreshold(PositionAwareSignalThreshold):
+    """``theta = fraction * g[position]`` — a fraction of *this* peak.
+
+    The motivating case for the position-aware family: the level scales
+    with each complex individually, so a low-voltage fibrotic activation
+    is measured against its own amplitude rather than against the
+    record's largest. That is usually what you want when comparing
+    complex *shapes* across a corpus whose amplitudes vary — and it is
+    why the index cannot be optional here.
+
+    The trade-off is that it says nothing about the noise floor. On a
+    weak activation barely above baseline, a small fraction of its peak
+    can fall *into* the noise, and an outward walk then runs until it
+    happens to dip — potentially into a neighbouring activation.
+    Measured on a four-activation train, ``fraction = 0.02`` produced a
+    597-sample "complex" that swallowed both neighbours. Bound the
+    search (see :func:`~..extraction.activation_based.measure_complex`)
+    or use :class:`MedianMadThreshold`, which is defined relative to the
+    floor and so cannot fall beneath it.
+
+    Parameters
+    ----------
+    fraction
+        In ``(0, 1)``. Required.
+    """
+
+    name: ClassVar[str] = "peak_fraction"
+
+    def __init__(self, fraction: float) -> None:
+        if not 0.0 < fraction < 1.0:
+            raise ValueError(f"fraction must be in (0, 1), got {fraction}.")
+        self.fraction = float(fraction)
+
+    def _compute_threshold(self, signal: np.ndarray, position: int) -> float:
+        return self.fraction * float(signal[position])
+
+    def __repr__(self) -> str:
+        return f"PeakFractionThreshold(fraction={self.fraction})"
