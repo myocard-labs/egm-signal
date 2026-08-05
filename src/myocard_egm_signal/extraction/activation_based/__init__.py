@@ -22,6 +22,10 @@ only the last one detects.
    the single-activation synthetic case), which is what actually
    answers "where are the activations?"
 
+Alongside the chain, :func:`measure_complex` measures how *wide* each
+activation is (onset, offset, rise, fall) — a study-time instrument for
+choosing the windowing margins, not a step in the chain.
+
 Public surface, built up across SIG1; more lands in later steps.
 """
 
@@ -29,6 +33,11 @@ from __future__ import annotations
 
 from .base import DetectionPreprocessor
 from .candidates import ActivationCandidate, CandidateSelector, LocalMaximaSelector
+from .complex_bounds import (
+    ActivationComplex,
+    measure_complex,
+    measure_complexes,
+)
 from .detection import TwoStageRefiner, detect_activation, detect_activation_train
 from .preprocessors import (
     DEFAULT_BOTTERON_BAND_HZ,
@@ -43,6 +52,7 @@ __all__ = [
     "DEFAULT_BOTTERON_BAND_HZ",
     "DEFAULT_BOTTERON_LOWPASS_HZ",
     "ActivationCandidate",
+    "ActivationComplex",
     "BotteronEnvelope",
     "CandidateSelector",
     "DetectionPreprocessor",
@@ -54,4 +64,6 @@ __all__ = [
     "TwoStageRefiner",
     "detect_activation",
     "detect_activation_train",
+    "measure_complex",
+    "measure_complexes",
 ]
