@@ -16,8 +16,8 @@ sentinel conventions) see
 [`project/architecture.md`](../project/architecture.md).
 
 > **Status: written incrementally.** Sections land as their code does,
-> alongside Phase-1.5 SIG1. §1–§3.4 are complete; §3.5–§5 arrive with
-> the steps named in their stubs. This doc is also the destination for the
+> alongside Phase-1.5 SIG1. §1–§3 are complete; §4–§5 arrive with the
+> steps named in their stubs. This doc is also the destination for the
 > egm-signal math currently parked in `iafdb-pipeline/docs/theory.md`
 > §1.1–1.3 / §2.1 — the repo that owns a primitive owns its math — so
 > some sections graduate content rather than deriving it fresh.
@@ -44,7 +44,7 @@ sentinel conventions) see
   - [3.2 Median/MAD threshold](#32-medianmad-threshold)
   - [3.3 Percentile threshold](#33-percentile-threshold)
   - [3.4 What the threshold is applied to](#34-what-the-threshold-is-applied-to)
-  - [3.5 Refractory suppression](#35-refractory-suppression) *(S4)*
+  - [3.5 Candidate extraction, suppression, and the chain](#35-candidate-extraction-suppression-and-the-chain)
 - [4. Activation-complex bounds](#4-activation-complex-bounds) *(S5)*
 - [5. Anchor windowing](#5-anchor-windowing) *(S6)*
 - [6. References](#6-references)
@@ -596,12 +596,91 @@ $+\infty$ (fail-closed, matching the empty-pool sentinel convention): an
 > [Pan & Tompkins 1985, IEEE TBME BME-32(3):230-236](https://doi.org/10.1109/TBME.1985.325532)
 > (the local-peaks → threshold → refractory chain this follows).
 
-### 3.5 Refractory suppression
+### 3.5 Candidate extraction, suppression, and the chain
 
-*Lands with S4, completing the chain.* Will cover non-maximum
-suppression over a refractory interval $\Delta_\text{refr}$, and its
-two-sided failure mode: splitting one fractionated activation into
-several, versus merging two genuine ones.
+The last two stages, and then the composition that is the detection
+function.
+
+**Candidate selection.** A candidate is a local maximum of $g$ at or
+above $\tau$ (§3.4), filtered by a minimum **prominence** — how far a
+peak rises above the higher of the two saddles bounding it.
+
+Prominence is the only candidate filter. An earlier implementation also
+exposed a minimum peak *width*, which was dropped: the method spec's
+step 3 filters on prominence alone, and a width measured at half
+prominence (what the library primitive provides) is partly a restatement
+of the prominence test rather than an independent criterion. Two
+overlapping shape filters invite interactions that neither the spec nor
+any measurement here justifies.
+
+The prominence filter is optional in the signature and **effectively
+required in practice**. An adaptive threshold sitting a few MAD above a
+quiet baseline is low in absolute terms, so filter ringing around a
+strong activation and ordinary noise bumps both clear it, and — being
+spaced further apart than $\Delta_\text{refr}$ — suppression keeps them.
+Measured on one fractionated complex with realistic noise:
+
+| preprocessor | no prominence floor | floor at $0.2\max g$ |
+|---|---|---|
+| Botteron envelope | 3 activations | **1** |
+| rectified derivative | 9 activations | **1** |
+
+The failure is silent, because spurious detections look exactly like
+activations.
+
+**Refractory suppression.** Enforce a minimum spacing
+$\Delta_\text{refr}$ between distinct activations. The Phase-1.5 default
+is **greedy by height**: sort candidates tallest to shortest, accept
+each only if no already-accepted peak lies within $\Delta_\text{refr}$.
+Every survivor is therefore the tallest peak in its own refractory
+neighbourhood.
+
+Height-ordered rather than time-ordered matters. A causal scan
+(Pan–Tompkins blanking) accepts whichever peak of a cluster arrives
+*first* and blanks the rest, so a small precursor deflection masks the
+genuine activation behind it. Ordering by height makes the result
+independent of which end of the record you start from — appropriate for
+an offline splitter, which has no causality constraint to respect. The
+method spec keeps four alternatives on a menu (causal blanking,
+sliding-window max, segment-merge, DP-optimal); complexity is not the
+deciding factor, since there are tens to hundreds of candidates per
+channel and this is offline work.
+
+**The two knobs do different jobs and must not be traded.** $\tau$
+separates activation from noise and far-field, on *amplitude*;
+$\Delta_\text{refr}$ collapses one activation's several deflections, on
+*time*. Raising $\tau$ to suppress fractionation also removes genuine
+**low-voltage** activations — which are exactly the fibrotic regions
+this project exists to find.
+
+**Two-stage refinement (optional, off by default).** The smoothed
+envelope's maximum is pulled toward the heavier side of an asymmetric
+complex, so a long fractionated tail drags the detected time late.
+Passing a *sharp* preprocessor as the refiner snaps each accepted
+activation to the nearest local maximum of that curve, within a small
+radius, recovering the instant the smoothing blurred. Keep the radius
+well under $\Delta_\text{refr}$: a radius able to reach a neighbouring
+activation lets refinement move a peak onto the wrong complex, and
+suppression has already run, so nothing downstream would catch it.
+
+**The chain.** For the IAFDB train: preprocess $\to$ threshold $\to$
+candidates $\to$ suppress $\to$ (optionally) refine. For synthetic,
+where the generator knows where it put the single activation,
+$t_a = \arg\max g$ and none of the rest applies.
+
+Each stage is a configured object — preprocessor, threshold, selector,
+suppressor, refiner — so the chain reads as a composition and each
+stage's parameters live with the stage that uses them. Two of those
+choices are deliberately unavailable by omission: the prominence floor
+and the suppressor must both be passed explicitly, because omitting
+either silently changes the activation count.
+
+> **Implementation** — `extraction/activation_based/candidates.py`,
+> `suppression.py`, `detection.py`.
+> **Pinned by** `tests/test_activation_detection.py`, including the
+> merged-above-$\tau$-run case, the fractionation-under-both-families
+> case, and the over-detection measurement above.
+> **Source** — [Pan & Tompkins 1985, IEEE TBME BME-32(3):230-236](https://doi.org/10.1109/TBME.1985.325532).
 
 ## 4. Activation-complex bounds
 

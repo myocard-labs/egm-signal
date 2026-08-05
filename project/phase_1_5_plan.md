@@ -2,7 +2,7 @@
 
 **Repo:** egm-signal · **Phase:** 1.5
 **Phase design doc:** `intracardiac-platform/phases/phase_1_5/design.md`
-**Status:** in progress · **Progress:** 4/11 steps done (S0 ✅ · S1 ✅ · S2 ✅ · S3 ✅)
+**Status:** in progress · **Progress:** 5/11 steps done (S0 ✅ · S1 ✅ · S2 ✅ · S3 ✅ · S4 ✅)
 
 **Release model (corrected 2026-08-01, Daniel).** Supersedes S0's "ships alone as v0.3.0 ahead of
 SIG1": egm-signal appears **once** in the Wave-1 order, so **all** of this plan's code lands before a
@@ -347,7 +347,7 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   returns `+inf`; the percentile strategy matches `np.percentile` on a known distribution.
 - **Depends on:** none (parallel with S1/S2).
 
-### S4 — The detection function: candidates → suppression → train ☐ (3–5 h) — **re-scoped 2026-08-04**
+### S4 — The detection function: candidates → suppression → train ✅ (3–5 h) — **re-scoped 2026-08-04**
 > _The method spec was fleshed out by Daniel + research on 2026-08-04; the 5-step IAFDB algorithm, the
 > candidate-extraction rule and the suppressor-as-strategy decision are all new since this plan was
 > written. Old scope (1.5–3 h) was "threshold `g`, then NMS"._
@@ -406,6 +406,74 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   206-sample region becomes **4 candidates** under local-maxima extraction, not one undifferentiated
   run.
 - **Depends on:** S2, S3.
+- **Done 2026-08-04.** Three modules — `candidates.py` (local maxima at or above `τ`, prominence /
+  width filters, enclosing above-`τ` segment returned for S5), `suppression.py` (`RefractorySuppressor`
+  ABC + `GreedyHeightSuppressor`, with the spec's other four documented in the menu and deferred to
+  `roadmap.md`), `detection.py` (`detect_activation` for synthetic, `detect_activation_train` for the
+  chain, `refine_activation_times` for the optional second stage). 26 tests, 170 total, gate green.
+  Theory §3.5 written.
+- **`scipy.signal.find_peaks` used rather than hand-rolled**, and the reason is not brevity: verified
+  that its `height` comparison is **inclusive**, matching the spec's `g[i] ≥ τ`, and that it resolves
+  a **flat-topped** peak to its midpoint. The naive `g[i-1] < g[i] > g[i+1]` test finds *nothing* on a
+  plateau — on quantized or synthetic data that silently loses activations. Pinned by a test.
+- **The prominence filter turned out to be effectively required, not optional.** On a single
+  fractionated complex with realistic noise, running the chain with no prominence floor gives **3**
+  activations under the Botteron envelope and **9** under the rectified derivative; with a floor at
+  20% of the curve maximum, **1** and **1**. Cause: an adaptive threshold a few MAD above a quiet
+  baseline is low in absolute terms, so filter ringing and noise bumps clear it — and being spaced
+  further apart than `Δ_refr`, suppression *keeps* them. The failure is silent, because spurious
+  detections look like activations. Documented in `find_candidates`, theory §3.5, and pinned by
+  `test_without_prominence_the_chain_over_detects`. Signature keeps it `None`-able (the right value is
+  data-dependent — the B22 rule) but the docstring now says plainly that omitting it over-detects.
+- **Suppression is height-ordered, and that is a design choice worth knowing.** A causal
+  (Pan–Tompkins-style) scan accepts whichever peak of a cluster arrives *first*, so a small precursor
+  deflection masks the genuine activation behind it. Height-ordering makes the result independent of
+  which end of the record you start from — right for an offline splitter with no causality constraint.
+- **Refinement guard:** the refiner's `radius_samples` must stay well under the suppressor's
+  `refractory_interval_samples`. A radius able to reach a neighbouring activation lets refinement move
+  a peak onto the wrong complex, and suppression has already run, so nothing downstream catches it.
+- **Review pass 2026-08-04 (Daniel) — six changes, one of which removed a feature:**
+  1. **`refractory_samples` → `refractory_interval_samples`, and moved onto the suppressor's
+     constructor.** It is configuration, like Botteron's band edges or the threshold's multipliers, so
+     one instance means one interval; `suppress(candidates)` now takes only candidates.
+  2. **`_above_threshold_segments` rewritten** with a worked example and step-by-step comments — the
+     `np.diff`/`np.split` idiom is compact but opaque on first read.
+  3. **`min_width_samples` removed.** Asked for a first-hand source and I have none. Checking the
+     *current* spec settled it: the rewritten step 3 filters on **prominence alone** — "minimum width"
+     was in the earlier draft and is gone. Worse, I had mapped it to `find_peaks(width=)`, which
+     measures width *at half prominence*, so it partly restates the prominence test rather than
+     complementing it — exactly the overlapping-filter interaction Daniel flagged. Untested surface
+     with no spec backing and no measurement; removed rather than defended.
+  4. **The dense `start, end = next(...)` generator replaced** by a named `_enclosing_segment` helper
+     with an explicit loop — and, on a follow-up question from Daniel, its silent fallback **removed**.
+     It returned a fabricated single-sample segment when no enclosing run was found. That case is in
+     fact **unreachable**: a peak exists only because `curve[peak] ≥ τ`, and the segments are the runs
+     where `curve ≥ τ` — same comparison, same `τ`. Verified over 3000 randomised curve/threshold
+     combinations plus plateau and NaN curves: zero violations. So it now raises `RuntimeError` naming
+     the broken invariant. The fabricated extent was the worse failure mode: it would have flowed a
+     made-up complex width into S5's onset/offset measurement, corrupting a downstream number instead
+     of failing where the fault is.
+  5. **Candidate selection is now a strategy family** — `CandidateSelector` ABC + `LocalMaximaSelector`
+     — matching the preprocessor / threshold / suppressor shape, and moving `min_prominence` off
+     `detect_activation_train`'s signature onto the object that uses it.
+  6. **`suppressor=None` now genuinely skips suppression** instead of silently substituting a greedy
+     default. It is a **required** keyword that accepts `None`, so the caller says "no suppression" on
+     purpose rather than reaching it by omission. `min_prominence` is required in the same way and for
+     the same reason — both silently change the activation count. `refiner=None` keeps its default,
+     because *that* default is the spec's documented behaviour rather than a silent choice.
+  7. **`find_peaks(prominence=0.0)` when the caller passes `None` — kept, with the reasoning inline.**
+     Daniel queried the substitution, I replaced it with a pass-through plus an explicit
+     `peak_prominences` call, and he preferred the original as more elegant. Kept, but the *why* is
+     now in the code: `find_peaks` only populates `props["prominences"]` when asked to filter on them,
+     and we report prominence on every candidate regardless. `0.0` is a true no-op filter rather than
+     an approximation — the comparison is **inclusive** — verified over 4000 curves (quantized and
+     flat-heavy, where plateaus are likeliest) that `None` and `0.0` select identical peaks, with zero
+     prominence-exactly-0 peaks ever occurring. The equivalence is now a *guarded assumption*:
+     `test_no_prominence_floor_and_a_zero_floor_agree` fails loudly if a future scipy makes that
+     comparison strict, rather than the selector quietly dropping peaks.
+  - Also folded in: `refine_with` + `refine_radius_samples` became a `TwoStageRefiner` object, which
+     removes the invalid combination of a refiner with no radius. A plain class, not an ABC — the spec
+     describes one refinement rule, not a family.
 
 ### S5 — Activation-complex bounds (onset / offset) ☐ (1.5–3 h)
 - **Change:** `extraction/activation_based/complex_bounds.py` — `ActivationComplex` frozen dataclass
