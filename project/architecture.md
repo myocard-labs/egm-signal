@@ -61,20 +61,34 @@ is clearly going to grow. Single-purpose files stay at the top level.
 ```
 src/myocard_egm_signal/
 ├── records.py             ← Record Protocol; ~1 class, unlikely to grow
+├── exceptions.py          ← degenerate-signal errors, shared across modules
 ├── windowing.py           ← grows to sliding_window_rms etc. later
-├── filters/               ← grows to notch, smoothing, decimation
+├── filters/               ← grows to notch, smoothing
+│   ├── bandpass.py
+│   ├── lowpass.py
+│   └── decimation.py      ← anti-alias + downsample, built on lowpass
 ├── calibration/           ← signal-amplitude calibration; grows to new strategies
 │   ├── base.py            ← Calibration + CalibrationStrategy Protocol
 │   ├── qrs_estimation.py  ← estimate_qrs_peak_to_peak helper
 │   ├── r_wave_anchoring.py
 │   └── _helpers.py        ← compute_calibration convenience
 ├── thresholds/            ← grows to new strategies in either direction
-│   ├── base.py            ← Both Protocols
+│   ├── base.py            ← two Protocols (pooled) + two ABCs (per-signal)
 │   ├── healthy.py         ← Absolute + Percentile + NoThreshold
-│   └── noise.py           ← AbsoluteQuiet + PercentileQuiet
+│   ├── noise.py           ← AbsoluteQuiet + PercentileQuiet
+│   └── detection.py       ← MedianMad + PercentileSignal + PeakFraction
 ├── extraction/            ← grows to future extractors
 │   ├── segments.py        ← HealthySegment + NoiseSegment dataclasses
-│   └── extractors.py      ← The two functions
+│   ├── extractors.py      ← the two fixed-stride functions
+│   └── activation_based/  ← cutting relative to activations, not at a stride
+│       ├── base.py           ← DetectionPreprocessor ABC
+│       ├── preprocessors.py  ← RectifiedDerivative + TeagerKaiser + Botteron
+│       ├── candidates.py     ← CandidateSelector + LocalMaximaSelector
+│       ├── suppression.py    ← RefractorySuppressor + GreedyHeight
+│       ├── detection.py      ← the chain: detect_activation[_train]
+│       ├── complex_bounds.py ← onset / offset / rise / fall measurement
+│       ├── anchoring.py      ← position generators + window_train + WindowSet
+│       └── windowers.py      ← detect-and-window in one call
 └── model/                 ← ML model pre/post-processing math
     └── temperature_scaling.py   ← fit_temperature + apply_temperature
 ```
@@ -147,6 +161,55 @@ Protocols themselves live in `thresholds/base.py`.
 operation; the producer should write a regular (non-noise) bank if it
 wants every window.
 
+### Then there were four
+
+Activation detection added two more families, and they split on a
+different axis than the first two. The full picture:
+
+| Family | Consumes | Style |
+|---|---|---|
+| `ThresholdStrategy` | pooled amplitudes, keep-above | Protocol |
+| `NoiseSegmentStrategy` | pooled amplitudes, keep-below | Protocol |
+| `SignalThreshold` | one 1-D signal, whole array | ABC |
+| `PositionAwareSignalThreshold` | one 1-D signal **at a sample** | ABC |
+
+The first two are distinguished by *direction*. The last two are
+distinguished by **how much context the rule needs** — and that turned
+out to matter more than it looked, because it is easy to name these
+after what they are *used for* instead. An earlier revision did exactly
+that, calling one `DetectionThreshold`. But a median/MAD rule is the
+same computation whether it is deciding "is this an activation?" or
+"where does this complex end?", so a name describing the use was a lie
+in one of the two places. What genuinely varies is that a peak-relative
+rule cannot be evaluated without knowing *which* peak, and a global rule
+has no use for that argument.
+
+The two signal families are **siblings, not parent and child**.
+`PositionAwareSignalThreshold` looks like a specialization, but
+inheriting would let it be passed where the base signature is expected
+and then fail — Liskov substitution does not hold when a subclass
+*requires* an argument the base does not have. Shared behaviour lives in
+free functions instead.
+
+### Protocol or ABC — the rule
+
+Both appear in this package, and the choice is not stylistic:
+
+- **Protocol** when *someone else's* type must satisfy the interface
+  without inheriting from us. The two pooled-amplitude families are
+  documented as user-extensible — a caller writes their own class and it
+  qualifies by shape alone, with no import of ours.
+- **ABC** when the family is one we ship and extend in-repo **and** has
+  shared behaviour worth enforcing rather than restating. Every ABC here
+  uses a template method: the public entry point validates, then
+  delegates to a `_`-prefixed hook. That is what makes the contract
+  unforgettable — a new subclass cannot skip the degenerate-input
+  handling, because it never writes the code path that would skip it.
+
+The ABCs additionally enforce a `name: ClassVar[str]` via
+`__init_subclass__`, so a strategy cannot reach provenance without
+being identifiable in a run record.
+
 ## Why `preferred_leads` is a kwarg, not a constant
 
 The R-wave anchoring strategy needs a list of surface ECG leads to try
@@ -209,6 +272,29 @@ preferable to fail closed.
 `NoThreshold` returns `-inf` (always-keep on the healthy side). It must
 not be used on the noise side — the docstring warns about this. There
 is no `NoQuietThreshold` to enforce the rule with the type system.
+
+### The signal thresholds deliberately do *not* follow this convention
+
+They **raise** instead, and the divergence is the point rather than an
+oversight. A sentinel is only safe if it stops at the boundary; these
+values flow onward. A `+inf` threshold propagates into the next stage
+and re-emerges as a plausible-looking result — measured, it made the
+activation-complex walk terminate on its first comparison and report a
+zero-width complex flagged as a *complete measurement*, indistinguishable
+from a real instantaneous one, on its way into a duration distribution.
+
+So `SignalThreshold` raises `EmptySignalError` or `ConstantSignalError`
+(both under `DegenerateSignalError`, itself a `ValueError`). The two
+causes are separated because they are different kinds of problem: an
+empty array is a **programming error**, since nothing legitimately
+produces one, while a flat array is a **data condition** — a dead
+electrode, or a channel clipped to a rail — that a sweep across
+thousands of channels should expect, count, and skip.
+
+The pooled-amplitude sentinel stays as it is, because an empty *pool* is
+a legitimate outcome of filtering (no window passed) whereas an empty or
+flat *signal* is not the outcome of anything. One is an answer, the
+other is a defect.
 
 ## Why two subpackages with "calibration" in their description
 
