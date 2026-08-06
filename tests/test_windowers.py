@@ -202,3 +202,20 @@ def test_windowers_report_their_configuration() -> None:
     assert MultiActivationWindower.name == "multi_activation"
     assert "BotteronEnvelope" not in repr(_multi())  # the name, not the class
     assert "botteron_envelope" in repr(_multi())
+
+
+def test_both_windowers_raise_the_same_thing_on_a_dead_channel() -> None:
+    """Surfaced by verifying the usage doc's own example.
+
+    The single-activation path has no threshold in front of it, so it was
+    raising a bare ValueError where every other path raised
+    ConstantSignalError. A sweep that catches the specific exception must
+    not have to know which variant it is holding."""
+    single = SingleActivationWindower(
+        preprocessor=RectifiedDerivative(),
+        position_generator=UniformPositionGenerator(0.5, 0.5),
+        window_length_samples=T,
+    )
+    for windower in (single, _multi()):
+        with pytest.raises(ConstantSignalError):
+            windower.window(np.zeros(2000))

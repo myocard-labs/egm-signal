@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from ...exceptions import ConstantSignalError, EmptySignalError
 from ...thresholds.base import SignalThreshold
 from .base import DetectionPreprocessor
 from .candidates import CandidateSelector
@@ -108,14 +109,26 @@ def detect_activation(signal: np.ndarray, *, preprocessor: DetectionPreprocessor
 
     Raises
     ------
-    ValueError
-        If the detection curve is constant — a flat channel has no
-        activation, and returning sample 0 would be a silent lie about
-        a trace that contains nothing.
+    EmptySignalError
+        On a zero-length trace.
+    ConstantSignalError
+        On a flat detection curve — a dead or disconnected electrode, or
+        a channel clipped to a rail. Returning sample 0 would be a silent
+        lie about a trace that contains nothing to anchor on.
+
+        These are the same exceptions the threshold rules raise for the
+        same conditions, so a caller sweeping channels can catch one
+        thing regardless of which detection path it is using. That
+        matters because this function is the *only* one in the chain with
+        no threshold in front of it — without this, a flat channel would
+        surface differently depending on whether the trace held one
+        activation or many.
     """
     curve = preprocessor.compute(signal)
-    if curve.size == 0 or float(curve.max()) == float(curve.min()):
-        raise ValueError(
+    if curve.size == 0:
+        raise EmptySignalError("cannot locate an activation in a zero-length trace.")
+    if float(curve.max()) == float(curve.min()):
+        raise ConstantSignalError(
             "no activation: the detection curve is constant, so the trace "
             "contains nothing to anchor on."
         )
