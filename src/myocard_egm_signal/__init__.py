@@ -82,7 +82,13 @@ from .extraction import (
     measure_complexes,
     window_train,
 )
-from .filters import bandpass, lowpass
+from .filters import (
+    DEFAULT_ANTIALIAS_CUTOFF_FRACTION,
+    DEFAULT_ANTIALIAS_ORDER,
+    bandpass,
+    decimate,
+    lowpass,
+)
 from .model import (
     DEFAULT_TEMPERATURE_BOUNDS,
     apply_temperature,
@@ -114,6 +120,8 @@ except metadata.PackageNotFoundError:  # pragma: no cover — editable install w
 
 
 __all__ = [
+    "DEFAULT_ANTIALIAS_CUTOFF_FRACTION",
+    "DEFAULT_ANTIALIAS_ORDER",
     "DEFAULT_BIPOLAR_BAND_HZ",
     "DEFAULT_BOTTERON_BAND_HZ",
     "DEFAULT_BOTTERON_LOWPASS_HZ",
@@ -164,6 +172,7 @@ __all__ = [
     "apply_temperature",
     "bandpass",
     "compute_calibration",
+    "decimate",
     "detect_activation",
     "detect_activation_train",
     "estimate_qrs_peak_to_peak",
