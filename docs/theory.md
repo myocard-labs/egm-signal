@@ -15,13 +15,12 @@ why the package is shaped the way it is (Protocols, strategy families,
 sentinel conventions) see
 [`project/architecture.md`](../project/architecture.md).
 
-> **Status: written incrementally.** Sections land as their code does,
-> alongside Phase-1.5 SIG1. §1–§4 and §5.1–§5.3 are implemented;
-> **§5.4–§5.7 are written ahead of the code** and specify S6b. This doc
-> is also the destination for the egm-signal math currently parked in
-> `iafdb-pipeline/docs/theory.md` §1.1–1.3 / §2.1 — the repo that owns a
-> primitive owns its math — so some sections graduate content rather
-> than deriving it fresh.
+> **Status: complete for the current library.** Written incrementally as
+> each piece of code landed, so every formula documents behaviour as
+> built rather than as intended. §6 graduates the math for the older
+> primitives from `iafdb-pipeline/docs/theory.md`, on the rule that the
+> repo owning a primitive owns its math; that document now links here
+> instead of restating it.
 
 > **Rendering note.** Equations are LaTeX — `$$…$$` display, `$…$`
 > inline. GitHub and VS Code typeset these; a plain-text viewer shows
@@ -63,7 +62,12 @@ sentinel conventions) see
   - [5.6 Classification, not dropping](#56-classification-not-dropping)
   - [5.7 The drop is not position-neutral](#57-the-drop-is-not-position-neutral)
   - [5.8 Three rules this module exists to enforce](#58-three-rules-this-module-exists-to-enforce)
-- [6. References](#6-references)
+- [6. Segment extraction and calibration](#6-segment-extraction-and-calibration)
+  - [6.1 Sliding-window peak-to-peak](#61-sliding-window-peak-to-peak)
+  - [6.2 Thresholds over pooled amplitudes](#62-thresholds-over-pooled-amplitudes)
+  - [6.3 R-wave-anchored calibration](#63-r-wave-anchored-calibration)
+  - [6.4 Two different things are called anchoring](#64-two-different-things-are-called-anchoring)
+- [7. References](#7-references)
 
 ## Notation
 
@@ -161,6 +165,20 @@ Every symbol used anywhere below, grouped by where it appears.
   $\Delta t^{(k)} = t_a^{(k+1)} - t_a^{(k)}$.
 - <a id="sym-surv"></a>$S(u) = \Pr[\mathrm{IAI} \ge u]$ — the interval **survival function**.
 - <a id="sym-round"></a>$\lfloor\cdot\rceil$ — round to nearest integer.
+
+**Segment extraction and calibration (§6)**
+
+- <a id="sym-Wseg"></a>$W$, $H$ — sliding-window length and hop, in samples. Distinct
+  from $T$ (the anchored crop length, §5) and from $W_\text{act}$ (a
+  *measured* activation width, §4).
+- <a id="sym-p2p"></a>$\mathrm{p2p}_i$ — a window's peak-to-peak amplitude; $P$ the pooled
+  set of them across a record's channels.
+- <a id="sym-TU"></a>$T$, $U$ — the keep-above and keep-below amplitude thresholds.
+  *(Unrelated to §5's window length $T$; the collision is confined to
+  this section.)*
+- <a id="sym-cal"></a>$a$ — the per-record calibration scalar; $M$ the median QRS
+  peak-to-peak it is derived from, $\rho_k$ the per-beat amplitude, and
+  $\tau_\text{QRS}$ the target it is solved against.
 
 **Conventions**
 
@@ -341,11 +359,6 @@ alike. Trim the edges before measuring, or measure spectrally.
 > **Pinned by** `tests/test_decimation.py`, which compares against naive
 > `signal[::M]` to show the 50 Hz alias appearing only without the
 > filter.
-
-**Sources.** The sampling theorem and the folding relation are standard;
-see Oppenheim & Schafer, *Discrete-Time Signal Processing*, on sampling
-rate reduction, and Crochiere & Rabiner, *Multirate Digital Signal
-Processing* (1983), for decimation specifically.
 
 ## 2. Detection preprocessing
 
@@ -725,7 +738,7 @@ and the case has not been characterised on IAFDB.
 
 > **Implementation** — `thresholds/detection.py`; ABC in
 > `thresholds/base.py`; candidate extraction in
-> `extraction/activation_based/` (S4).
+> `extraction/activation_based/candidates.py`.
 > **Pinned by** `tests/test_detection_thresholds.py`, including the
 > breakdown-point contrast and the local-maxima equivalence.
 > **Sources** — [Hampel 1974, JASA 69(346):383-393](https://doi.org/10.1080/01621459.1974.10482962)
@@ -817,7 +830,8 @@ and the suppressor must both be passed explicitly, because omitting
 either silently changes the activation count.
 
 > **Implementation** — `extraction/activation_based/candidates.py`,
-> `suppression.py`, `detection.py`.
+> `extraction/activation_based/suppression.py`,
+> `extraction/activation_based/detection.py`.
 > **Pinned by** `tests/test_activation_detection.py`, including the
 > merged-above-$\tau$-run case, the fractionation-under-both-families
 > case, and the over-detection measurement above.
@@ -1227,12 +1241,13 @@ the first and the last. Rejected rather than special-cased, because any
 convention picked for the degenerate case would flow straight into the
 stored distribution.
 
-**A window that does not fit raises; it does not slide.** Clamping to
-the array edge would change the realized position without saying so: the
+**A window that does not fit is reported, not slid.** Clamping to the
+array edge would change the realized position without saying so: the
 activation would no longer sit where it was asked to, and the stored
-value would record the slide as though it were intended. Callers that
-want to skip such activations test `window_is_within_bounds`
-first.
+value would record the slide as though it were intended. So such a
+window comes back flagged out-of-bounds, carrying its start index and
+realized position — both pure arithmetic — with only the crop absent,
+and the caller decides whether to keep it (§5.6).
 
 **Produced, never measured.** $p_\text{realized}$ is the anchor the crop
 *placed*. It is not re-derived from the waveform afterwards — a consumer
@@ -1248,7 +1263,199 @@ zero.
 > **Pinned by** `tests/test_anchoring.py`, including the round-trip
 > through the contract's conversion formula and the half-sample bound.
 
-## 6. References
+## 6. Segment extraction and calibration
+
+§1–§5 describe the **activation-anchored** path: find where the tissue
+activates, then cut relative to that. This section covers the other one —
+cutting at a **fixed stride** and selecting by amplitude — together with
+the calibration that makes an absolute amplitude threshold mean anything.
+They are older primitives, and this section graduates their math from the
+consumer that used to hold it, on the rule that the repo owning a
+primitive owns its math.
+
+### 6.1 Sliding-window peak-to-peak
+
+On a filtered channel of length $n$, with window length $W$ and hop $H$,
+the window starts are
+
+$$
+s_i = i \cdot H,
+\qquad
+i = 0, 1, \dots, \left\lfloor \frac{n - W}{H} \right\rfloor ,
+$$
+
+giving $\lfloor (n-W)/H \rfloor + 1$ windows, or none at all when
+$W > n$. Each window is reduced to one number,
+
+$$
+\mathrm{p2p}_i
+= \operatorname*{nanmax}_{s_i \le j < s_i + W} y[j]
+\;-\; \operatorname*{nanmin}_{s_i \le j < s_i + W} y[j] ,
+$$
+
+NaN-aware on both ends so a gap in the recording does not poison the
+whole window. That single scalar does double duty: it is the statistic
+segments are *selected* by (§6.2), and it is the amplitude value stored
+alongside each retained segment.
+
+> **Three different window lengths appear in this document** and are
+> easy to conflate. $W$ here is a fixed-stride analysis window. $T$
+> (§5) is the anchored crop length, a shared configuration value.
+> $W_\text{act}$ (§4) is a *measured* property of an activation, not a
+> parameter at all.
+
+### 6.2 Thresholds over pooled amplitudes
+
+A threshold strategy consumes the peak-to-peak values of a whole record
+— every window of every requested channel, concatenated —
+
+$$
+P = \bigl\{\, \mathrm{p2p}_{c,i} \;:\; c \in \mathcal{C},\ i \,\bigr\} ,
+$$
+
+and returns one scalar for the record. Two families, differing only in
+which side of it they keep:
+
+| Strategy | Returns | Needs calibration? |
+|---|---|---|
+| `AbsoluteThreshold(v)` | $v$ | yes — $v$ is an absolute amplitude |
+| `PercentileThreshold(q)` | $P_q(P)$ | no — scale-invariant |
+| `NoThreshold` | $-\infty$ | n/a — keeps everything |
+| `AbsoluteQuietThreshold(v)` | $v$ | yes |
+| `PercentileQuietThreshold(q)` | $P_q(P)$ | no |
+
+with the selection rules
+
+$$
+\text{keep-above: } \mathrm{p2p}_{c,i} \ge T,
+\qquad
+\text{keep-below: } \mathrm{p2p}_{c,i} \le U .
+$$
+
+**Pooling is across channels, per record.** One threshold is computed
+from all the requested channels together and then applied to each — not
+one threshold per channel. A percentile is therefore a *different*
+absolute amplitude in every record, which is exactly what makes it
+usable on uncalibrated input: it adapts to that record's own
+distribution. The cost is that a single unusually loud channel raises
+the bar for its neighbours; that is the intended behaviour when the
+question is "which parts of this record are high-voltage", and the wrong
+behaviour if the question were per-channel, which this does not answer.
+
+**Channels that are absent are skipped, silently.** The extractors
+intersect the requested list with what the record actually carries. This
+is a defensive guard with, as of this writing, **no consumer that
+exercises it**: a sweep of all 32 IAFDB records found all five CS
+bipolar pairs present in every one, so the skip never fires on the
+bipolar path. Worth stating plainly, so a later reader does not infer a
+motivating dataset behind it that does not exist.
+
+**The empty-pool sentinels are chosen per direction, not shared.** With
+no data to compute from, `PercentileThreshold` returns $+\infty$ and
+`PercentileQuietThreshold` returns $-\infty$. Both mean *keep nothing* —
+but they are opposite values, because the comparison runs the other way.
+Using $+\infty$ on the keep-below side would accept **everything** and
+turn an empty input into a full output, which is the failure that would
+propagate furthest before anyone noticed.
+
+This is deliberately *not* the convention the signal thresholds of §3
+follow: those raise (§3.1) rather than returning a sentinel. An empty
+*pool* is a legitimate outcome of filtering — no window passed — whereas
+an empty or flat *signal* is not the outcome of anything. One is an
+answer, the other is a defect.
+
+### 6.3 R-wave-anchored calibration
+
+An absolute amplitude threshold presumes the signal is on a known scale,
+which raw recordings are not. R-wave anchoring recovers a per-record
+scalar by using the surface ECG's QRS complex as a common reference —
+the one feature that is present in every record and roughly comparable
+across them.
+
+1. **Choose a lead.** Walk a priority list and take the first the record
+   carries.
+2. **Measure each beat.** For each QRS annotation $q_k$, take the
+   peak-to-peak of the **raw, unfiltered** lead over a window centred on
+   it, clamped to the signal bounds:
+   $$
+   \rho_k = \max_{|j - q_k| \le \text{half}} x[j] \;-\; \min_{|j - q_k| \le \text{half}} x[j] .
+   $$
+3. **Aggregate robustly.** $M = \operatorname{median}_k \rho_k$, so an
+   ectopic beat or a noise burst does not set the scale.
+4. **Solve for the scalar.** Against a target QRS amplitude $\tau_\text{QRS}$,
+   $$
+   a = \frac{\tau_\text{QRS}}{M} .
+   $$
+
+**The target is not named here, and that is deliberate.** It is a policy
+value belonging to the pipeline that knows its corpus, and this library
+ships no default for it — naming one in prose would rebuild the
+two-sources-of-truth problem that removing the code default was meant to
+eliminate.
+
+**Why the lead walk is load-bearing rather than a fallback.** Measured
+across all 32 IAFDB record headers: every record carries exactly **three**
+surface leads, drawn from only four that appear at all —
+$\{$I, II, V1$\}$ ×12, $\{$II, V1, aVF$\}$ ×8, $\{$I, II, aVF$\}$ ×8,
+$\{$I, V1, aVF$\}$ ×4. **No record carries all eight** of the default
+priority list. The walk resolves to lead II for 28 records and lead I for
+the remaining 4, and the tail of the list (aVL, III, aVR, V5) is inert —
+those leads occur in no record. That is the concrete argument for the
+priority list being a caller-supplied argument rather than a constant.
+
+**Linearity is what makes the scalar reasonable about.** The band-pass
+is linear, so
+
+$$
+\mathrm{BP}(a \cdot x) = a \cdot \mathrm{BP}(x) ,
+$$
+
+and the calibration can be applied before or after filtering with the
+same result. It also scales the peak-to-peak of §6.1 exactly, since
+$\max$ and $\min$ are both positively homogeneous. So a calibrated
+absolute threshold means what it says.
+
+**An honest caveat about what is being anchored.** The reference is
+measured on the *full-bandwidth* surface ECG — a QRS is a
+low-frequency deflection, largely below the 30 Hz low-cut used on the
+bipolar signal — and the resulting scalar is then applied to a bipolar
+trace that *is* band-limited. So a target expressed as an R-wave
+amplitude is a whole-ECG quantity being used to scale a band-limited
+intracardiac one. It is a defensible engineering anchor and it is
+reproducible, but it is not a literature-standard calibration, and any
+write-up should say so rather than imply the numbers carry clinical
+units.
+
+### 6.4 Two different things are called anchoring
+
+Both appear in this document, they share a word, and they have nothing
+else in common. Stating the difference once, here, because this is the
+only place both are described:
+
+| | **R-wave anchoring** (§6.3) | **Activation-peak anchoring** (§5) |
+|---|---|---|
+| Measured on | the **surface ECG** | the **bipolar EGM** |
+| The feature | the QRS complex | the steepest deflection, $\max\lvert dV/dt\rvert$ |
+| What it produces | an amplitude scalar $a$ | a window position $p$ |
+| What it fixes | the **voltage** axis | the **time** axis |
+| Per | record | activation |
+
+An amplitude calibration and a temporal crop are simply different
+operations, and neither constrains the other. The shared word is an
+accident of English, not a shared mechanism.
+
+> **Implementation** — `windowing.py` (§6.1); `thresholds/healthy.py`
+> and `thresholds/noise.py` (§6.2), with the pooling itself in
+> `extraction/extractors.py`; `calibration/` (§6.3).
+> **Pinned by** `tests/test_windowing.py`, `tests/test_thresholds.py`,
+> `tests/test_extraction.py`, `tests/test_calibration.py`.
+> **Sources** — the bipolar voltage tiers this path's absolute
+> thresholds are usually set from are
+> [Marchlinski 2000, Circulation 101(11):1288-1296](https://doi.org/10.1161/01.CIR.101.11.1288);
+> the 30-300 Hz extraction band is a consumer-side convention recorded
+> in the project bibliography, not a property of these primitives.
+
+## 7. References
 
 Primary sources for every technique above, linked. Where a DOI exists it
 is the link; otherwise PubMed/PMC or the publisher page.
@@ -1264,6 +1471,17 @@ is the link; otherwise PubMed/PMC or the publisher page.
   filtering.* IEEE Trans Signal Processing 44(4):988–992, 1996.
   [[DOI]](https://doi.org/10.1109/78.492552) — the edge-handling method
   behind `sosfiltfilt`'s zero-phase result.
+
+### Sampling and multirate
+
+- **Crochiere RE, Rabiner LR.** *Multirate Digital Signal Processing.*
+  Prentice-Hall, Englewood Cliffs, 1983. ISBN 0-13-605162-6 — the
+  standard treatment of decimation and the anti-alias requirement (§1.4).
+  A book, so no DOI; ISBN given instead.
+- **Oppenheim AV, Schafer RW.** *Discrete-Time Signal Processing.*
+  Prentice-Hall — the sampling theorem and the folding relation, in the
+  chapter on sampling-rate reduction. Cited generically because the
+  chapter numbering differs across its three editions.
 
 ### Activation detection
 
@@ -1349,6 +1567,9 @@ is the link; otherwise PubMed/PMC or the publisher page.
 
 - [`scipy.signal.butter`](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.butter.html)
   · [`scipy.signal.sosfiltfilt`](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.sosfiltfilt.html)
+  · [`scipy.signal.find_peaks`](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.find_peaks.html)
+  · [`scipy.signal.decimate`](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.decimate.html)
+  (the source of §1.4's 0.8 cutoff fraction)
 
 ### Project context
 

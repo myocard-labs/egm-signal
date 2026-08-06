@@ -2,7 +2,7 @@
 
 **Repo:** egm-signal · **Phase:** 1.5
 **Phase design doc:** `intracardiac-platform/phases/phase_1_5/design.md`
-**Status:** in progress · **Progress:** 11/13 steps done (S0 ✅ · S1 ✅ · S2 ✅ · S3 ✅ · S4 ✅ · S5 ✅ · S6 ✅ · S6b ✅ · S6c ✅ · S7 ✅ · S8 ✅)
+**Status:** in progress · **Progress:** 12/13 steps done (S0 ✅ · S1 ✅ · S2 ✅ · S3 ✅ · S4 ✅ · S5 ✅ · S6 ✅ · S6b ✅ · S6c ✅ · S7 ✅ · S7a ✅ · S8 ✅) — only S9 (phase exit) left
 
 **Release model (corrected 2026-08-01, Daniel).** Supersedes S0's "ships alone as v0.3.0 ahead of
 SIG1": egm-signal appears **once** in the Wave-1 order, so **all** of this plan's code lands before a
@@ -843,7 +843,7 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   against a synthetic record and the last one is deliberately fed a flat channel to exercise the
   `except` path it demonstrates.
 
-### S7a — `docs/theory.md` — the repo's canonical math home 🔨 (2.5–5 h) — **now incremental**
+### S7a — `docs/theory.md` — the repo's canonical math home ✅ (2.5–5 h) — **incremental, closed 2026-08-06**
 - **Restructured 2026-08-01 (Daniel):** the theory doc is written **as the math lands**, not in one
   pass at the end, so each step's math is reviewable while its code is fresh. **Every technique
   carries a clickable primary-source link** (DOI where one exists, else PubMed/PMC/publisher) so a
@@ -911,6 +911,35 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   — activation detection and windowing are familiar ground here, unlike egm-features' entropy /
   fractal math, which is why that doc runs to 950 lines and this one shouldn't.
 - **Depends on:** S1–S6 (documents as-built), S7.
+- **Closed 2026-08-06.** 1580 lines, 49 headings, §1–§7. The remaining graduation landed as a new
+  **§6 Segment extraction and calibration** — sliding-window peak-to-peak, the pooled-amplitude
+  threshold strategies, R-wave-anchored calibration — plus **§6.4**, the two-anchorings table this
+  doc exists to hold. Posted **CL-133** so iafdb-pipeline can trim theirs to links.
+- **§6 sits as its own section rather than being folded in.** §1–§5 describe the activation-anchored
+  path end to end; the graduated material is the *other* path (fixed stride, amplitude selection).
+  Interleaving them would have broken a narrative that currently reads start to finish.
+- **Carried across deliberately, not summarised away:** iafdb's 32-header sweep in full (three
+  surface leads per record from four that occur; no record carries all eight; the walk resolves to
+  lead II for 28 and lead I for 4 — so the priority walk is load-bearing, not a fallback), and their
+  honest caveat that a full-bandwidth surface-ECG reference is being used to scale a band-limited
+  bipolar trace. **No default calibration target is named**, per the S0 rule.
+- **Found while writing §6.2 — the two empty-pool sentinels are opposite values and that is
+  correct.** `+inf` keep-above, `-inf` keep-below; both mean "keep nothing", but a shared `+inf` on
+  the keep-below side would accept *everything* and turn an empty input into a full output. Also
+  recorded that the skip-absent guard has **no consumer exercising it** (all five CS bipolar pairs
+  present in all 32 records), so a later reader cannot infer a motivating dataset that does not exist.
+- **Verification, not eyeballing.** Every module path and test file named in an Implementation /
+  Pinned-by box checked to exist (found two bare filenames — `suppression.py`, `detection.py` — that
+  did not resolve as written, now fully qualified); every named test function checked to exist; TOC
+  slugs cross-checked against headings; one stale `window_is_within_bounds` reference from before the
+  S6b surface trim removed, and one leaked plan-step reference `(S4)` taken out of what is meant to
+  be a permanent document. DOIs spot-checked live against Crossref — **Steinhaus 1989**'s abstract
+  confirms the ">1.8 ms under non-uniform coupling" figure §2.1 attributes to it, and **Pan &
+  Tompkins 1985** matches volume and pages exactly.
+- **Stale claim found in iafdb's copy, reported in CL-133.** Their §2.1 still tells readers
+  `DEFAULT_TARGET_QRS_PP_MV` is 1.5 mV and flags the two-layer default split in their §7 — B22
+  removed that constant in v0.3.0, so both passages now describe a fixed problem and point at a
+  symbol that no longer exists.
 
 ### S8 — `filters.decimation` (B9) ✅ (0.5–1.5 h) — ~~conditional~~ **built unconditionally 2026-08-06**
 - **Change:** `filters/decimation.py` — anti-alias low-pass + integer-factor downsample, reusing S1's
