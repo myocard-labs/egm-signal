@@ -16,11 +16,12 @@ sentinel conventions) see
 [`project/architecture.md`](../project/architecture.md).
 
 > **Status: written incrementally.** Sections land as their code does,
-> alongside Phase-1.5 SIG1. §1–§4 are complete; §5 arrives with the
-> step named in its stub. This doc is also the destination for the
-> egm-signal math currently parked in `iafdb-pipeline/docs/theory.md`
-> §1.1–1.3 / §2.1 — the repo that owns a primitive owns its math — so
-> some sections graduate content rather than deriving it fresh.
+> alongside Phase-1.5 SIG1. §1–§4 and §5.1–§5.3 are implemented;
+> **§5.4–§5.7 are written ahead of the code** and specify S6b. This doc
+> is also the destination for the egm-signal math currently parked in
+> `iafdb-pipeline/docs/theory.md` §1.1–1.3 / §2.1 — the repo that owns a
+> primitive owns its math — so some sections graduate content rather
+> than deriving it fresh.
 
 > **Rendering note.** Equations are LaTeX — `$$…$$` display, `$…$`
 > inline. GitHub and VS Code typeset these; a plain-text viewer shows
@@ -52,14 +53,20 @@ sentinel conventions) see
   - [4.2 Choosing theta](#42-choosing-theta)
   - [4.3 Relationship to the above-tau segment](#43-relationship-to-the-above-tau-segment)
   - [4.4 A study-time criterion, not a runtime filter](#44-a-study-time-criterion-not-a-runtime-filter)
-- [5. Anchor windowing](#5-anchor-windowing) *(S6)*
+- [5. Anchor windowing](#5-anchor-windowing)
+  - [5.1 Placing the window](#51-placing-the-window)
+  - [5.2 Why a fraction and not a sample offset](#52-why-a-fraction-and-not-a-sample-offset)
+  - [5.3 Requested versus realized position](#53-requested-versus-realized-position)
+  - [5.4 The position range](#54-the-position-range)
+  - [5.5 Windowing a train](#55-windowing-a-train)
+  - [5.6 Classification, not dropping](#56-classification-not-dropping)
+  - [5.7 The drop is not position-neutral](#57-the-drop-is-not-position-neutral)
+  - [5.8 Three rules this module exists to enforce](#58-three-rules-this-module-exists-to-enforce)
 - [6. References](#6-references)
 
 ## Notation
 
-Every symbol used anywhere below, grouped by where it appears. Symbols
-introduced by a section that has not landed yet are marked with the step
-that brings them.
+Every symbol used anywhere below, grouped by where it appears.
 
 **Signal and indexing**
 
@@ -129,12 +136,26 @@ that brings them.
 - <a id="sym-radius"></a>$R_\text{before}$, $R_\text{after}$ — the per-side search radius
   bounding the outward walk (§4.2).
 
-**Anchor windowing (§5, S6)**
+**Anchor windowing (§5)**
 
 - <a id="sym-T"></a>$T$ — window length in samples.
 - <a id="sym-p"></a>$p \in [0,1]$ — the activation's fractional position within the
   window; $0.0$ is the first sample, $1.0$ the last.
-- <a id="sym-s"></a>$s = \lfloor t_a - p\,(T-1) \rceil$ — the window's start sample.
+- <a id="sym-s"></a>$s = \lfloor t_a - p\,(T-1) \rceil$ — the window's start sample; the
+  window is the half-open interval $[s,\, s+T)$.
+- <a id="sym-prealized"></a>$p_\text{realized} = (t_a - s)/(T-1)$ — the position the crop
+  actually produced, as opposed to the one requested. This is the value
+  stored as `ActivationPosition`.
+- <a id="sym-Pcal"></a>$\mathcal{P}$ — the **position range** $p$ is drawn from; a
+  $(\text{lo}, \text{hi})$ fraction pair, point-collapsible.
+  $\mathcal{P}_\text{synth} \supseteq \mathcal{P}_\text{iafdb}$ by design.
+- <a id="sym-train"></a>$\{t_a^{(k)}\}_k$ — the ordered **activation train**; $k$ indexes
+  activations, so $W_k$, $p_k$, $s_k$ are that activation's window,
+  position and start.
+- <a id="sym-iai"></a>$\mathrm{IAI}_\text{prev}$, $\mathrm{IAI}_\text{next}$ — the intervals
+  from an anchor to its previous / next neighbour;
+  $\Delta t^{(k)} = t_a^{(k+1)} - t_a^{(k)}$.
+- <a id="sym-surv"></a>$S(u) = \Pr[\mathrm{IAI} \ge u]$ — the interval **survival function**.
 - <a id="sym-round"></a>$\lfloor\cdot\rceil$ — round to nearest integer.
 
 **Conventions**
@@ -873,10 +894,279 @@ those margins rather than to run per window.
 
 ## 5. Anchor windowing
 
-*Lands with S6.* Will cover: $s = \lfloor t_a - p\,(T-1) \rceil$, the
-$[0,1]$ fractional-position convention shared fleet-wide as
-`ActivationPosition`, requested-vs-realized position under rounding, and
-the boundary and multi-beat predicates.
+### 5.1 Placing the window
+
+Given an activation at [$t_a$](#sym-ta), a requested fractional position
+[$p$](#sym-p) and a window length [$T$](#sym-T), the window is
+$[s,\, s+T)$ with
+
+$$
+s = \lfloor t_a - p\,(T-1) \rceil ,
+$$
+
+so $p = 0$ puts the activation on the window's **first** sample, $p = 1$
+on its **last**, and $p = 0.5$ centres it. The $T-1$ rather than $T$ is
+the whole content of the convention: there are $T$ samples but only
+$T-1$ intervals between them, so $p$ interpolates between sample $0$ and
+sample $T-1$ inclusive. Using $T$ would make $p = 1$ land one sample past
+the end.
+
+The window is **half-open**, matching the crop: sample $s$ is inside,
+sample $s+T$ is not. The multi-beat predicate uses the same interval, so
+a neighbouring activation exactly at $s+T$ is correctly judged to be
+outside the window it is not in.
+
+### 5.2 Why a fraction and not a sample offset
+
+$p$ is **rate- and length-independent by construction**. The same
+$p = 0.35$ means the same thing on a 500-sample window at 1 kHz and a
+250-sample window at 500 Hz. That is what lets a corpus assembled from
+sources with different sampling rates and window lengths have a single
+comparable position distribution — which is the point, since §8.1
+compares the synthetic and IAFDB distributions against each other. A
+sample offset would have to be re-derived for every rate/length
+combination, and the derivation would end up living at each call site.
+
+This is a fleet contract, not a local convention:
+`common.schema.json#/$defs/ActivationPosition` in egm-contracts defines
+it once and both `iafdb_bank` and `synthetic_bank` `$ref` it, so the two
+corpora cannot drift.
+
+### 5.3 Requested versus realized position
+
+$s$ is an integer, so the position a window *achieves* is generally not
+the one requested. Both are kept, and the **realized** one is what gets
+stored:
+
+$$
+p_\text{realized} = \frac{t_a - s}{T - 1}.
+$$
+
+The error is bounded by half a sample, because integer rounding of $s$
+is its only source. Measured over 200 000 random $(p, T)$ pairs with
+$T \in [2, 1000)$: **max 0.49999 samples, mean 0.250**. The bound is
+attained exactly when $p\,(T-1)$ lands on a tie:
+
+| $T$ | $p\,(T-1)$ at $p = 0.5$ | $s$ | $p_\text{realized}$ | error |
+|---|---|---|---|---|
+| 100 | 49.5 — a tie | $t_a - 50$ | 0.505051 | 0.500 samples |
+| 101 | 50.0 — exact | $t_a - 50$ | 0.500000 | 0.000 samples |
+
+Ties round to even, which is Python's `round`. Which way a tie breaks is
+arbitrary and the choice is not load-bearing — either direction moves the
+window one sample and the realized position half a sample, inside the
+error the caller has already accepted — but it is fixed, so the same
+request always yields the same crop.
+
+The realized position is also **quantized**: only $T$ values are
+reachable, spaced $1/(T-1)$ apart. At $T = 100$ that is 0.0101, at
+$T = 10$ it is 0.111. Worth knowing before reading structure into a
+histogram of stored positions at short window lengths — the comb is an
+artifact of the crop, not of the physiology.
+
+The conversion back is the contract's own formula, and it is exact:
+
+$$
+\lfloor p_\text{realized}\,(T-1) \rceil = t_a - s ,
+$$
+
+since $t_a - s$ is already an integer. A consumer therefore recovers the
+anchor sample exactly, at any $T$.
+
+### 5.4 The position range
+
+$p$ is not chosen per window by hand; it is drawn from a range
+$\mathcal{P}$, and drawing it is what **blocks the positional shortcut**
+— if every window put the activation in the same place, a classifier
+could key on position instead of morphology, which is the T1 hypothesis
+this whole apparatus exists to test.
+
+In code $\mathcal{P}$ is a *generator* rather than a bare interval —
+uniform-over-$(\text{lo}, \text{hi})$ is the policy this phase uses, but
+it is a policy, and a shaped distribution is a plausible later need (if
+the §5.7 residual ever wanted correcting, that is where it would go).
+
+The uniform form is a $(\text{lo}, \text{hi})$ fraction pair
+and is **point-collapsible**: $(x, x)$ is a fixed position, which is the
+baseline arm of the anchored-versus-varied A/B. One representation
+covers both arms, so switching between them is a value change rather
+than a code path — the same idiom the noise mixer uses for
+`snr_db_range=(X, X)`.
+
+**The range is shared as a mechanism, not as a value.** The two corpora
+deliberately use *different* ranges: $\mathcal{P}_\text{synth} \supseteq
+\mathcal{P}_\text{iafdb}$, because a single-beat synthetic trace has no
+signal before the upstroke, so a far-back position fills the window with
+flat pre-activation that is both uninformative and unlike real EGM. The
+synthetic range is therefore **back-bounded** — which also means the
+range is *not* required to be symmetric about $0.5$, and this library
+does not impose that. A central band is a common choice (§5.6), not a
+constraint of the type.
+
+The consequence is recorded as a project limitation rather than fixed:
+because the ranges differ by design, the stored `activation_position`
+coordinate reads **non-zero in the corpus-comparison distance by
+construction**, and carries no realism information.
+
+### 5.5 Windowing a train
+
+The caller-facing operation is not "window this activation" but
+**"window this train"**: given a signal and the ordered activation train
+$\{t_a^{(k)}\}$ from §3.5, produce one window per anchor,
+
+$$
+p_k \sim \mathcal{P},
+\qquad
+s_k = \lfloor t_a^{(k)} - p_k\,(T-1) \rceil,
+\qquad
+W_k = x[s_k : s_k + T].
+$$
+
+**Synthetic traces go through the same operation as a train of one.**
+They have a single known activation, so the "train" has one member. That
+is not a special case bolted on — it is the reason the operation is
+shaped this way. Running both corpora through one code path is what
+guarantees the window geometry cannot drift between them, which is the
+same argument that put the crop arithmetic in this library, applied one
+level up.
+
+### 5.6 Classification, not dropping
+
+Not every anchor yields a usable window. Two conditions matter:
+
+- **In bounds** — $[s_k,\, s_k+T)$ lies inside the signal. The first and
+  last activations of a record often fail this.
+- **Single beat** — exactly one train member lies in $[s_k,\, s_k+T)$. A
+  window containing a neighbouring activation is multi-beat, and no
+  single position describes it.
+
+This library **reports both and drops neither.** It returns every window
+labelled, along with each anchor's neighbouring intervals
+$\mathrm{IAI}_\text{prev}$ and $\mathrm{IAI}_\text{next}$; deciding what
+to keep belongs to the producer. Two reasons the seam sits here:
+
+1. **The policies genuinely differ.** The IAFDB side drops boundary and
+   multi-beat windows; the synthetic side sizes its simulation so the
+   single window is always in bounds and multi-beat is impossible. A
+   library that dropped would be imposing one corpus's policy on both.
+2. **The drop rate is a measured quantity.** Choosing $T$ and
+   $\mathcal{P}$ is a yield-versus-morphology trade-off, and yield is
+   exactly the fraction dropped. Drops that happen invisibly inside a
+   library cannot be counted by the study that exists to count them.
+
+### 5.7 The drop is not position-neutral
+
+This is the subtle one, and it is why the intervals are reported rather
+than merely used.
+
+A window survives the multi-beat test when the previous activation is at
+least $pT$ behind and the next at least $(1-p)T$ ahead. With
+$S(u) = \Pr[\mathrm{IAI} \ge u]$ the interval survival function and
+neighbours roughly independent,
+
+$$
+\Pr[\text{single beat} \mid p] = S(pT)\,S\big((1-p)T\big).
+$$
+
+That is **a function of $p$**. So dropping multi-beat windows does not
+merely reduce the count — it *reshapes the realized position
+distribution*, on the IAFDB side only, since the synthetic side drops
+nothing. The distribution actually stored is therefore not the
+$\mathcal{P}$ that was requested.
+
+*(The analysis uses $pT$ where the crop uses $p(T-1)$; the one-sample
+difference is immaterial to the yield model and is kept here to match
+the method spec's form.)*
+
+**Memoryless intervals cancel exactly.** For $S(u) = e^{-u/\mu}$,
+
+$$
+S(pT)\,S\big((1-p)T\big) = e^{-pT/\mu}\,e^{-(1-p)T/\mu} = e^{-T/\mu},
+$$
+
+independent of $p$. So an exponential interval distribution loses
+windows without reshaping the positions of the survivors at all.
+
+**What actually decides it is whether $T/2$ fits under the shortest
+intervals.** "Regular versus memoryless" is the wrong axis, and
+measuring it through the implementation makes that clear. A **central**
+anchor needs about $T/2$ of margin on *each* side; an **edge** anchor
+needs nearly all of $T$ on *one* side. So when the interval distribution
+has substantial mass below $T$ but little below $T/2$, central anchors
+are protected and edge anchors are not, and the survivors skew central.
+Measured at $T = 192$, drawing $p$ uniformly over $[0,1]$ and keeping
+the single-beat windows — the shape of the surviving positions in five
+bins, normalised to its own peak:
+
+| interval distribution | $T/2$ vs floor | surviving shape (5 bins over $p$) | edge/centre |
+|---|---|---|---|
+| exponential $\mu{=}200$, no floor | — | 0.97 · 0.94 · 0.99 · 1.00 · 0.99 | **0.98** |
+| exponential $\mu{=}200$, floor 40 | 96 > 40 | 1.00 · 0.84 · 0.91 · 0.91 · 0.98 | **1.08** |
+| exponential $\mu{=}200$, floor 100 | 96 < 100 | 0.62 · 0.72 · 1.00 · 0.74 · 0.62 | **0.62** |
+| regular 180 ± 15 (fast flutter) | 96 < ~150 | 0.62 · 0.94 · 1.00 · 0.98 · 0.65 | **0.64** |
+
+The two exponential rows differ *only* in their floor and land on
+opposite sides of the effect, which isolates the mechanism: it is the
+floor relative to $T/2$, not the regularity, that matters. A regular
+rhythm near its cycle length is simply the most common way to get a
+floor above $T/2$ — and it is the relevant one here, since $T = 192$ ms
+is fixed by an unrelated architectural constraint and atrial flutter
+cycles near 180 ms sit inside the design envelope.
+
+The practical form of the check: compare $T/2$ against a **low
+percentile** of the measured interval distribution, per record. That is
+computable from the reported intervals alone.
+
+**The resolution is to choose $\mathcal{P}$, not to correct the output.**
+The keep weight is symmetric in $p$ and flat near $0.5$, steepening only
+toward the edges, so a **central band** makes the reshaping negligible by
+construction. It is also the yield-maximising choice exactly where the
+bias appears: a central $p$ needs symmetric margins of about $T/2$ on
+each side, which a 180 ms cycle comfortably provides, whereas an edge $p$
+needs more than $T$ on one side, which it barely does.
+
+The two corrections one would otherwise reach for were both considered
+and rejected for this phase: **acceptance-rejection thinning** costs
+yield, which is the scarce quantity; **inverse-probability weighting**
+keeps every window but requires weighted distances downstream and weights
+persisted alongside the data. Neither is worth it for an effect that is
+flutter-only and disappears once the simulator becomes multi-beat. If a
+correction is ever needed, thinning is the one to reach for, because it
+composes with the existing drop step and changes nothing downstream.
+
+What this library owes that decision is the **measurement**: reporting
+$\mathrm{IAI}_\text{prev}$ and $\mathrm{IAI}_\text{next}$ per anchor lets
+the per-anchor keep probability be read straight off observed data, with
+no need to fit $S$.
+
+### 5.8 Three rules this module exists to enforce
+
+**$T \ge 2$.** $p_\text{realized}$ divides by $T-1$, and a one-sample
+window has no meaningful position — its single sample is simultaneously
+the first and the last. Rejected rather than special-cased, because any
+convention picked for the degenerate case would flow straight into the
+stored distribution.
+
+**A window that does not fit raises; it does not slide.** Clamping to
+the array edge would change the realized position without saying so: the
+activation would no longer sit where it was asked to, and the stored
+value would record the slide as though it were intended. Callers that
+want to skip such activations test `window_is_within_bounds`
+first.
+
+**Produced, never measured.** $p_\text{realized}$ is the anchor the crop
+*placed*. It is not re-derived from the waveform afterwards — a consumer
+wanting the measured dV/dt-max position computes it with egm-features.
+Conflating the two would quietly convert a comparison of *where we put
+the activation* into a comparison of *where a detector later found it*,
+which is a different quantity with different failure modes (§3.5). For
+the same reason $p = 0$ is a **legitimate stored value**, meaning the
+activation sits on the first sample, so absence must never be read as
+zero.
+
+> **Implementation** — `extraction/activation_based/anchoring.py`.
+> **Pinned by** `tests/test_anchoring.py`, including the round-trip
+> through the contract's conversion formula and the half-sample bound.
 
 ## 6. References
 

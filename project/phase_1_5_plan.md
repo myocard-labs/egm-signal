@@ -2,7 +2,7 @@
 
 **Repo:** egm-signal · **Phase:** 1.5
 **Phase design doc:** `intracardiac-platform/phases/phase_1_5/design.md`
-**Status:** in progress · **Progress:** 6/11 steps done (S0 ✅ · S1 ✅ · S2 ✅ · S3 ✅ · S4 ✅ · S5 ✅)
+**Status:** in progress · **Progress:** 9/13 steps done (S0 ✅ · S1 ✅ · S2 ✅ · S3 ✅ · S4 ✅ · S5 ✅ · S6 ✅ · S6b ✅ · S6c ✅)
 
 **Release model (corrected 2026-08-01, Daniel).** Supersedes S0's "ships alone as v0.3.0 ahead of
 SIG1": egm-signal appears **once** in the Wave-1 order, so **all** of this plan's code lands before a
@@ -122,6 +122,39 @@ python3 -m venv .venv-check
 ```
 
 `.venv*/` is gitignored, so the venv can persist across steps.
+
+> **⚠ The sandbox interpreter changed under us (2026-08-06), and this recipe now half-works.** The
+> sandbox went from **Python 3.12 → 3.10** (coincided with a Claude desktop update, so most likely a
+> new sandbox image; Daniel's own machine has no 3.10, so **local runs are unaffected** — this is a
+> sandbox-only problem). It **cannot be fixed from inside**: `uv python install 3.12` reaches
+> `github.com` but the binary lives on `release-assets.githubusercontent.com`, which the proxy refuses
+> (403 after CONNECT); there is no sudo, and jammy's apt has no 3.12. The downgrade breaks the
+> persisted venv two ways and quietly degrades mypy:
+>
+> - **The stale venv is unusable and undeletable.** Its interpreter is now 3.10 while its
+>   `site-packages` is still `lib/python3.12/`, so `pip`, `mypy` and everything else vanish (`ruff`
+>   survives only because it is a standalone binary in `bin/`). The mount refuses `rm` on it
+>   (`Operation not permitted`), so it cannot simply be rebuilt in place.
+> - **Python 3.10 caps numpy at 2.2.x** (2.3+ needs ≥3.11), and numpy 2.2's stubs make mypy emit
+>   ~120 spurious `type-arg` errors — spread across files nobody touched (`test_filters.py`,
+>   `thresholds/base.py`, …), which is how you tell it apart from a real regression.
+>
+> **Workaround until the interpreter is back:** build the gate venv in the writable scratch mount and
+> point it at the repo, with no editable install (so nothing is written into the repo):
+>
+> ```
+> python3 -m venv <scratch>/.venv-gate
+> <scratch>/.venv-gate/bin/pip install "numpy>=1.26,<2.5" "scipy>=1.10" "pytest>=8.0" \
+>     "ruff==0.15.17" "mypy==2.1.0"
+> PYTHONPATH=src <scratch>/.venv-gate/bin/pytest -q
+> PYTHONPATH=src <scratch>/.venv-gate/bin/mypy --cache-dir=/tmp/mypy-cache src tests
+> ```
+>
+> Clear the mypy cache when switching environments — a stale cache from the other interpreter makes
+> mypy die with `INTERNAL ERROR` rather than a useful message. **`ruff` and `pytest` are trustworthy
+> under this workaround; mypy is not** — filter `type-arg` and read what remains. Everything else
+> (`attr-defined`, `call-arg`, …) is still real, and did catch a genuine missing `__all__` entry at
+> S6c. A clean mypy run must happen on a 3.12 interpreter before the PR.
 
 **Why it matters (learned the hard way at S0/S1).** The gate's result depends on the *numpy* version,
 and only `pip install -e ".[dev]"` resolves the one this repo declares (`numpy>=1.26,<2.5` → 2.4.6):
@@ -563,7 +596,13 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   the spec notes later multi-beat work will *want* some edge-clipped windows. The practical fallback
   (fixed generous asymmetric margins when boundaries can't be measured on real AF) is documented.
 
-### S6 — Anchor windowing + predicates ☐ (1–2 h)
+### S6 — Anchor-window kernel + predicates ☑ (1–2 h) — **re-scoped 2026-08-05 (CL-125)**
+> **What this step is now.** S6 shipped the **single-anchor kernel**. The design has since moved the
+> per-anchor *loop*, the `PositionRange` type and its *draw* into this repo (CL-125), so the
+> caller-facing primitive is **S6b**'s `window_train`. S6's functions stay as the kernel it is built
+> from; `window_from_anchor` is no longer the API a producer reaches for. The original spec below is
+> unchanged; the review findings follow it.
+
 - **Change:** `extraction/activation_based/anchoring.py` — `AnchoredWindow` frozen dataclass
   (`start_sample`, `end_sample`, `activation_sample`, `requested_position`, `realized_position`,
   `signal`); `anchor_window_start(t_a, p, T) -> int` (`s = round(t_a − p(T−1))`, pure integer math);
@@ -584,6 +623,198 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   run off either end; the multi-beat predicate is true for an isolated activation and false when a
   neighbour falls inside the window, including at the `[s, s+T)` half-open edges.
 - **Depends on:** S4 (the train type the multi-beat predicate consumes).
+- **Done 2026-08-05.** `anchoring.py` — `AnchoredWindow`, `anchor_window_start`,
+  `window_from_anchor`, `window_is_within_bounds`, `window_is_single_beat`. 22 tests, 226 total, gate
+  green. Theory §5 written (5.1 placement · 5.2 fraction-vs-offset · 5.3 requested-vs-realized ·
+  5.4 the three enforced rules).
+- **`realized_position` matches the shipped contract wording, checked against the schema.** Re-read
+  `common.schema.json#/$defs/ActivationPosition` rather than working from this plan's paraphrase:
+  `[0,1]`, 0.0 = first sample, `idx = round(frac·(T−1))`, produced-not-measured, and absence ≠ zero.
+  A test applies the contract's *own* conversion formula to our output and asserts it recovers the
+  anchor exactly, at every `T` swept — so if the stored value ever stopped meaning what the schema
+  says, that test fails rather than the two corpora quietly disagreeing.
+- **Rounding is bounded, and the bound is measured not asserted.** Over 200 000 random `(p, T)` pairs
+  with `T ∈ [2, 1000)`: **max 0.49999 samples, mean 0.250**. The bound is attained exactly on a tie —
+  `T=100, p=0.5` gives `p(T−1) = 49.5` → realized 0.505051, error 0.500 samples; `T=101` is exact.
+  Ties round to even (Python's `round`); the direction is arbitrary and documented as not
+  load-bearing, but fixed so a request is reproducible.
+- **Quantization is worth knowing before reading a position histogram.** Only `T` realized values are
+  reachable, spaced `1/(T−1)`: 0.0101 at `T=100`, 0.111 at `T=10`. The comb in a stored-position
+  distribution at short window lengths is an artifact of the crop, not physiology. Recorded in §5.3.
+- **Out-of-bounds raises rather than sliding.** Clamping to the array edge would change the realized
+  position without saying so — the activation would no longer sit where it was asked to, and the
+  stored value would record the slide as intentional. `window_is_within_bounds` is the predicate for
+  callers that want to skip instead of handling an exception per trace.
+- **`AnchoredWindow.signal` is `compare=False, repr=False`.** A generated `__eq__` over an ndarray
+  raises on the ambiguous truth value, and the array would make the frozen dataclass unhashable. The
+  index fields identify a window on their own; pinned by a test.
+- **S6 review (Daniel, 2026-08-05) — three findings, two fixed here, one escalated.**
+  1. *Naming.* `position` → `activation_position`, matching the schema field and the `$def` exactly, so
+     one word spans code, bank column and contract. Repo-wide finding: **counts and indices shared the
+     `_sample(s)` suffix** — `window_samples` is a length, `start_sample` an index. Going forward
+     `_samples` marks a count/duration and `_index` an array position. **Scoped to `anchoring.py`**
+     (Daniel): committed S1–S5 code keeps its names rather than taking a rename diff.
+  2. *Redundant validation + a dead predicate.* `_validate_window_samples` fired twice per
+     `window_from_anchor` (measured), and `window_is_single_beat` had **no caller in `src/`** — it was
+     written to a spec that had no loop to use it in. Both dissolve in S6b: the batch primitive
+     validates once and the predicate becomes load-bearing.
+  3. *The real gap — no train, no `𝒫`, no selection algorithm.* Escalated as **CL-125** (scope) and
+     **CL-126** (a measurement). Both resolved 2026-08-05 → **S6b**.
+
+### S6b — `window_train` + `PositionRange` ☑ (3–5 h) — **new 2026-08-05 (CL-125 · CL-126 · CL-127)**
+
+> **Why this step exists.** S6 implemented design §3's SIG1 row as it stood, which named only the
+> single-anchor helper. Reviewing it surfaced that the *selection algorithm* — loop the train, draw
+> `p ∼ 𝒫`, judge each window — lived nowhere: design §3 had left it split across SEP2 and IAF1 as
+> "response only" work. **I had already flagged this in CL-016 and declined to escalate it**, judging
+> it lower-stakes than the crop-rounding case. That was backwards: a one-sample crop disagreement is
+> invisible in a histogram, whereas a differently-implemented draw or drop rule moves the
+> *distribution* — and a distribution match is precisely what T1 tests. Re-raised as CL-125 and
+> adopted.
+
+- **Change:** `extraction/activation_based/anchoring.py` (or a sibling module) —
+  - **`PositionRange`** — the `𝒫` type. A `(lo, hi)` fraction pair, **point-collapsible** (`(x, x)` is
+    the fixed-position baseline arm), mirroring the mixer's `snr_db_range=(X,X)` idiom per design §3
+    **A4**. Carries the draw (`rng`-driven) and the shared `idx = round(frac·(T−1))` convention.
+    **Ships no default range** — the values are the producer's (library-defaults rule).
+  - **`window_train(signal, activation_train, *, position_range, window_length_samples, rng)
+    -> WindowSet`** — the single windowing primitive. One window per anchor; per window it reports the
+    crop, the realized position, the start index, `single_beat`, `in_bounds`, and `iai_prev` /
+    `iai_next`.
+  - **`WindowSet`** — the result container: the per-window records plus columnar accessors for the
+    flags and realized positions (masks and arrays, *not* a `.keep()` — see the seam below).
+- **The classify-not-drop seam (the load-bearing decision).** `window_train` **does not drop**. It
+  labels each window and hands the whole set back; **keep / drop / stride / pool is the producer's**
+  (IAF1 drops boundary + multi-beat; SEP2's train-of-one is always in bounds by sim-sizing). Two
+  reasons this seam sits here and not one function deeper: dropping is *policy* and the two corpora
+  have deliberately different policies, and §8.1 needs to *measure* the drop rate — which is impossible
+  if the drops happen invisibly inside the library.
+- **Synthetic is a train of one.** Both corpora go through `window_train`; the synthetic side passes a
+  single known activation. One code path, so the geometry cannot drift between corpora — the same
+  argument that put the crop math here, applied one level up.
+- **`iai_prev` / `iai_next` are reported because §8.1 needs them** (CL-127): the per-anchor
+  keep-probability reads straight off the observed intervals, with no need to model the survival
+  function `S`. First and last anchors have no neighbour on one side — report `None` there rather than
+  a sentinel, since "no neighbour" is a different statement from "an infinitely long interval", and a
+  train of one has `None` on both sides.
+- **Out-of-bounds windows carry no crop.** `in_bounds=False` means there is no valid length-`T` array
+  to return, so the record's signal is `None` while `s`, the realized position and the flags remain
+  defined (all are pure arithmetic). The single-anchor `window_from_anchor` keeps **raising** — it is
+  the kernel, and a caller naming one anchor has made a specific request that cannot be honoured.
+- **Verify:** `window_train` over a synthetic train of one reproduces `window_from_anchor` exactly;
+  over a detected train it returns one record per anchor in train order; `single_beat` is false exactly
+  when a neighbour lands in `[s, s+T)`; `in_bounds` is false exactly at the record edges and the record
+  still carries `s` + realized position; `iai_prev`/`iai_next` are `None` only at the train ends;
+  a point-collapsed `PositionRange` yields a constant realized position (up to the half-sample rounding
+  bound); a seeded `rng` is reproducible; the realized-position distribution over a wide train tracks
+  the requested range.
+- **Also verify the bias, since we now have the machinery:** a regression asserting the CL-126 numbers
+  — on a synthetic regular train at `T ≈ cycle` the *surviving* (single-beat) positions are
+  centre-biased, and on a memoryless train they are not. This is the check §8.1 will run for real, and
+  pinning it here means the study inherits a tested measurement rather than writing its own.
+- **Depends on:** S4 (the train), S6 (the kernel).
+- **Done 2026-08-05.** `PositionRange`, `AnchoredWindow` (now carrying the classification),
+  `WindowSet`, `window_train`. 41 tests in `test_anchoring.py`, 241 total, gate green. Theory
+  §5.4–§5.7 written ahead of the code and reconciled after.
+- **One type, not two.** `window_from_anchor` and `window_train` both return `AnchoredWindow`;
+  `single_beat` is `bool | None` where **`None` means *not assessed*** — the kernel has no train to
+  judge against — which is a different statement from `False` (a neighbour was found). Considered a
+  second record type for the train path; rejected as two near-identical dataclasses for one field's
+  worth of difference.
+- **A collapsed `PositionRange` does not consume the rng.** The fixed arm returns its constant without
+  drawing, so it is reproducible however the generator is seeded or shared, and the A/B arms cannot
+  desynchronise through draw-order. Pinned by a test.
+- **The measurement sharpened the theory — "regular vs memoryless" is the wrong axis.** Writing the
+  regression revealed that what decides the bias is whether **`T/2` fits under the shortest intervals**:
+  a central anchor needs ~`T/2` margin on *each* side, an edge anchor needs nearly all of `T` on *one*.
+  Measured at `T=192`, uniform `p`, keeping single-beat windows (5-bin shape of survivors, edge/centre):
+
+  | intervals | `T/2` vs floor | edge/centre |
+  |---|---|---|
+  | exponential μ=200, **no floor** | — | **0.98** (flat — the analytic cancellation, confirmed) |
+  | exponential μ=200, floor 40 | 96 > 40 | **1.08** |
+  | exponential μ=200, floor 100 | 96 < 100 | **0.62** |
+  | regular 180±15 (fast flutter) | 96 < ~150 | **0.64** |
+
+  The two exponential rows differ *only* in their floor and land on opposite sides, which isolates the
+  mechanism. A regular rhythm near its cycle is just the commonest way to get a floor above `T/2` — and
+  the relevant one, since `T=192` is fixed and flutter cycles near 180 ms are in the envelope. The
+  practical §8.1 check is therefore **`T/2` against a low percentile of the measured intervals**, per
+  record, computable from `iai_prev_samples` / `iai_next_samples` alone. Theory §5.7 rewritten to match;
+  worth a line back to research since CL-127's framing was rhythm-based.
+- **`WindowSet` exposes masks and `select(mask)`, never a `keep()`.** The conjunction
+  `in_bounds_mask & single_beat_mask` is spelled at the call site rather than assumed here — naming it
+  would be asserting the producer's policy from inside the library, which is exactly the seam CL-125
+  drew.
+
+- **S6b review (Daniel, 2026-08-05/06) — six comments; five applied here, one became S6c.**
+  1. **`PositionRange` → `ActivationPositionGenerator` (ABC) + `UniformPositionGenerator`.** It is a
+     *generator of positions under a distribution*, and uniform-over-an-interval is one policy, not the
+     definition. A4's semantics are untouched: point-collapsible `(lo, hi)`, `(x, x)` = the fixed arm.
+  2. **`draw(rng, count)` → `generate(count)`, with the stream owned at init.** Counted first: *sample*
+     appears ~50 times across this library's names and **always means a signal sample** —
+     `window_length_samples`, `hop_samples`, `qrs_samples`, `n_samples`. A method named `sample()`
+     returning position fractions would be the one statistical use among fifty signal ones, and the
+     proposed `gen_samples` keeps the overloaded word while reading as "generate signal samples" — the
+     exact wrong meaning. `generate` avoids it entirely. Seeding at construction also drops `rng` from
+     `window_train`'s signature. **Makes the object stateful — a first for this repo → CL-128.**
+  3. **`WindowSet` carries no configuration.** Dropped `position_range` *and* `window_length_samples`:
+     both are already on every record, so a copy on the set could only ever disagree with them.
+  4. **`single_beat` → `single_activation`.** What the code can assert is that one member of the
+     *detected train* is inside; a fractionated complex the detector splits makes a genuinely
+     single-beat window read `False`. Naming it `single_beat` promised a physiological fact the
+     detector cannot deliver. Pinned by a test using a 4-sample split. Diverges from design §3 → CL-128.
+  5. **Public surface cut to what callers need.** `anchor_window_start`, `window_is_within_bounds`,
+     `window_is_single_beat` each had exactly **one internal caller** and were validate-then-delegate
+     wrappers; `window_from_anchor` was fully subsumed by `window_train` with a train of one. All four
+     are now private — leaving a raising variant public invites a producer to reach for the wrong one
+     and lose the classification.
+  6. The windower idea → **S6c**.
+- **`WindowSet.concat` added 2026-08-06 (Daniel).** A **classmethod**, not a staticmethod: it is an
+  alternate constructor, so returning `cls(...)` gives a subclass its own type back, matching the
+  `dict.fromkeys` idiom. Takes an iterable (composes with a generator expression, so the real-side
+  idiom `concat(s.select(...) for s in sets)` reads in one line). **Rejects mixed window lengths** —
+  `T` is one value coupled across the simulator, the splitter and the classifier input, so a
+  mixed-length pool is a wiring mistake rather than a choice, and catching it here beats discovering
+  it when the windows fail to stack with nothing left to say which source disagreed.
+- **Pooling costs the index fields their meaning — documented, not fixed.** `activation_index`,
+  `start_index` and `end_index` are positions in *their own source signal*, so once windows from
+  different channels or records share a set, two can carry identical indices pointing at unrelated
+  places. Positions, flags, intervals and crops all survive pooling; the indices do not. A producer
+  needing per-window provenance (IAF1's patient-aware split is the obvious one) should keep its own
+  `(source, WindowSet)` pairs and pool last, or not pool at all. Deliberately **no source-identity
+  field here** — inventing one would be guessing at a provenance scheme the producer owns.
+
+### S6c — `ActivationWindower` ☑ (1.5–3 h) — **new 2026-08-06 (Daniel's S6b review)**
+- **Change:** `extraction/activation_based/windowers.py` — `ActivationWindower` ABC holding the
+  position generator and `T`, with `window(signal) -> WindowSet` as a template method and `_detect`
+  as the single abstract step; `SingleActivationWindower` (argmax of the detection curve) and
+  `MultiActivationWindower` (the full chain). One configured object, one call per trace.
+- **The axis is how the train is obtained, not beat count.** Only detection differs between the
+  corpora; everything after it is shared, so that is the only overridable step — which is what
+  prevents the two corpora's windows being cut differently. Pinned by a test that feeds a windower's
+  own detected train back through `window_train` and asserts the record is identical.
+- **No third "known-anchor" variant — settled by CL-130, and for a better reason than we asked about.**
+  The method spec's *"the generator knows the activation location"* is **wrong**: it is true of the
+  **stimulus** and false of the **electrode**. synthetic-egm confirmed the stored trace is a pseudo-EGM
+  (a distance-weighted sum of membrane current over the whole mesh), so its timing depends on
+  conduction velocity, the *realized* fibrosis draw, electrode standoff and pair position — solver
+  outputs, none of them config values. Daniel's read was right.
+  **The part neither of us had:** Finitewave *does* ship `ActivationTimeTracker`, so an exact time **is**
+  obtainable — and it still must not be used here, because a `V_m` node-threshold crossing is a
+  **different measurand** from a bipolar EGM's steepest deflection. Substituting it would put two
+  different quantities under one field name across the corpora and flatter the T1 comparison the field
+  exists to make. That argument is stronger than "we don't have the number", so it is now recorded in
+  `SingleActivationWindower`'s docstring — the earlier text advised the opposite and was **wrong**.
+  The tracker is backlogged instead as a *detector cross-check*: synthetic is the only place ground
+  truth exists, so it is the only place this detector's bias and jitter can be measured rather than
+  trusted.
+- **`window_train` stays public** for the case where re-detecting would be wrong: a probe sweeping crop
+  offsets over one simulation must detect once on the source and shift by exact integers, or the
+  position axis carries per-crop detector jitter.
+- **Done 2026-08-06.** 20 windower tests; 246 total; ruff clean. mypy caught a real defect the tests
+  could not — four names imported in tests but missing from `__all__`, which `attr-defined` flagged
+  while the runtime import worked fine.
 
 ### S7 — Package wiring + usage docs ☐ (1–2 h)
 - **Change:** `extraction/activation_based/__init__.py` re-exports; `extraction/__init__.py` and the
