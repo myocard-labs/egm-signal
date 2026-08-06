@@ -31,6 +31,14 @@ Public surface, built up across SIG1; more lands in later steps.
 
 from __future__ import annotations
 
+from .anchoring import (
+    MIN_WINDOW_LENGTH_SAMPLES,
+    ActivationPositionGenerator,
+    AnchoredWindow,
+    UniformPositionGenerator,
+    WindowSet,
+    window_train,
+)
 from .base import DetectionPreprocessor
 from .candidates import ActivationCandidate, CandidateSelector, LocalMaximaSelector
 from .complex_bounds import (
@@ -47,23 +55,37 @@ from .preprocessors import (
     TeagerKaiser,
 )
 from .suppression import GreedyHeightSuppressor, RefractorySuppressor
+from .windowers import (
+    ActivationWindower,
+    MultiActivationWindower,
+    SingleActivationWindower,
+)
 
 __all__ = [
     "DEFAULT_BOTTERON_BAND_HZ",
     "DEFAULT_BOTTERON_LOWPASS_HZ",
+    "MIN_WINDOW_LENGTH_SAMPLES",
     "ActivationCandidate",
     "ActivationComplex",
+    "ActivationPositionGenerator",
+    "ActivationWindower",
+    "AnchoredWindow",
     "BotteronEnvelope",
     "CandidateSelector",
     "DetectionPreprocessor",
     "GreedyHeightSuppressor",
     "LocalMaximaSelector",
+    "MultiActivationWindower",
     "RectifiedDerivative",
     "RefractorySuppressor",
+    "SingleActivationWindower",
     "TeagerKaiser",
     "TwoStageRefiner",
+    "UniformPositionGenerator",
+    "WindowSet",
     "detect_activation",
     "detect_activation_train",
     "measure_complex",
     "measure_complexes",
+    "window_train",
 ]
