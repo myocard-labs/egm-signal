@@ -2,7 +2,9 @@
 
 **Repo:** egm-signal · **Phase:** 1.5
 **Phase design doc:** `intracardiac-platform/phases/phase_1_5/design.md`
-**Status:** in progress · **Progress:** 12/13 steps done (S0 ✅ · S1 ✅ · S2 ✅ · S3 ✅ · S4 ✅ · S5 ✅ · S6 ✅ · S6b ✅ · S6c ✅ · S7 ✅ · S7a ✅ · S8 ✅) — only S9 (phase exit) left
+**Status:** ✅ **complete — ready for the dev→release PR** · **Progress:** 13/13 steps done
+(S0 ✅ · S1 ✅ · S2 ✅ · S3 ✅ · S4 ✅ · S5 ✅ · S6 ✅ · S6b ✅ · S6c ✅ · S7 ✅ · S7a ✅ · S8 ✅ · S9 ✅).
+Ships as **v0.4.0**; S0 already shipped alone as v0.3.0.
 
 **Release model (corrected 2026-08-01, Daniel).** Supersedes S0's "ships alone as v0.3.0 ahead of
 SIG1": egm-signal appears **once** in the Wave-1 order, so **all** of this plan's code lands before a
@@ -979,7 +981,7 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   the limit from the filter order (10 / 16 / 28 samples at order 2 / 4 / 8, verified against measured
   behaviour) and the message says what to do about it.
 
-### S9 — Docs + phase-exit ☐ (0.5–1.5 h)
+### S9 — Docs + phase-exit ✅ (0.5–1.5 h)
 - **Change:** `project/architecture.md` gains the `extraction/activation_based/` subpackage in the
   folder-layout tree plus a short section on the third threshold hierarchy and the fail-closed
   detection sentinel; `roadmap.md` drops the now-shipped Phase 1.5 items (and B9 if S8 ran);
@@ -988,6 +990,37 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
 - **Verify:** the full `intracardiac-platform/project/pr_checklist.md` run passes, including the
   §2 code-placement audit (nothing here reaches for a bank, an artifact, or a sibling package).
 - **Depends on:** all prior steps.
+- **Done 2026-08-06.** `architecture.md`, `roadmap.md`, `CHANGELOG.md`, `README.md`,
+  `pyproject.toml` → **0.4.0**. Checklist run below.
+- **`architecture.md`:** folder layout gains `activation_based/`, `filters/decimation.py` and
+  `exceptions.py`; "Why two parallel threshold hierarchies" gains a **"Then there were four"**
+  subsection (the new split is by *how much context a rule needs*, not by direction) and the
+  **Protocol-or-ABC rule** is finally written down — Protocol when someone else's type must
+  conform without inheriting, ABC when we ship and extend the family in-repo and there is shared
+  behaviour worth enforcing via a template method. The sentinel section gains why the signal
+  thresholds **deliberately diverge** and raise instead.
+- **`roadmap.md` collapsed to future-only** per the changelog/roadmap split: Phase 1.5 is now a
+  two-line pointer at the CHANGELOG and this plan, since every item shipped. Backlog untouched;
+  B9 is gone from it because it shipped as S8.
+- **The changelog documents net state, not development churn.** Everything from S1–S8 is new
+  since 0.3.0, so the intermediate restructures a consumer never saw (the threshold-family
+  rename, the `+inf` → raise switch, the `PositionRange` → generator move) are **not** listed as
+  changes — they were never released. 0.4.0 is purely additive; nothing that worked against
+  0.3.0 behaves differently.
+- **The README named a module that does not exist.** Its map listed
+  `myocard_egm_signal.noise_thresholds` — the noise strategies have lived in `thresholds` for
+  some time. Rewrote the map against a check that imports every module it names, which is how
+  this surfaced; also swapped the stale "v0.2.0+ plan" pointer and added the theory-doc link.
+- **PR checklist run.** §1 green (mypy confirmed clean by Daniel on a 3.12 interpreter, since the
+  sandbox cannot). §2: no sibling imports, no bank/artifact access, runtime deps still just
+  numpy + scipy, and every policy value required rather than defaulted — the only defaults added
+  this phase are the anti-alias filter's order and cutoff fraction, which are filter-design
+  values, recorded at the constants. §5: `.venv*/` ignoring confirmed live, and
+  `git ls-files src` confirms the new `activation_based/` package is tracked — the
+  gitignore-swallows-a-source-package failure mode, checked rather than assumed.
+- **One deviation from the checklist wording:** §3 asks for `CHANGELOG.md [Unreleased]`. Written
+  as a dated **[0.4.0]** section instead, because this is a phase-boundary release that gets
+  tagged rather than work accumulating toward an unknown future version.
 
 ## Complexity + estimate
 

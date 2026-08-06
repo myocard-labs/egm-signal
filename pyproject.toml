@@ -25,8 +25,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "myocard-egm-signal"
-version = "0.3.0"
-description = "Generic signal-processing primitives for intracardiac EGM data: filters, windowing, threshold strategies, calibration, and Record-Protocol-driven segment extractors."
+version = "0.4.0"
+description = "Generic signal-processing primitives for intracardiac EGM data: filters, windowing, threshold strategies, calibration, activation detection, and Record-Protocol-driven segment extractors."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"

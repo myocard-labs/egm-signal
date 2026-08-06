@@ -12,32 +12,12 @@ component-internal — add when a consumer needs them.
 
 ## Phase 1.5 — sim-realism
 
-Scoped and stepped out in [`phase_1_5_plan.md`](phase_1_5_plan.md) — that plan is the active
-step list and progress tracker; the entries below are the roadmap-level summary.
+**Shipped in v0.4.0** (SIG1 `extraction.activation_based`, `filters.lowpass`,
+`filters.decimation`, `docs/theory.md`) and **v0.3.0** (B22, the QRS-default removal). See
+[`CHANGELOG.md`](../CHANGELOG.md) for what landed and
+[`phase_1_5_plan.md`](phase_1_5_plan.md) for how.
 
-- **`extraction.activation_based`** (**SIG1**) — activation-detection **and anchor-window**
-  primitives: the detection function `g` (rectified `dV/dt` · Teager–Kaiser · Botteron
-  envelope), adaptive-threshold + refractory-NMS train detection, envelope onset/offset, the
-  shared `window_from_anchor` helper, and the boundary + multi-beat predicates. The crop math
-  lives here — not in the consumers — so SEP2 (synthetic) and IAF1 (IAFDB) cannot drift a
-  sample apart and inject a false activation-position bias downstream.
-- **`docs/theory.md`** (part of **SIG1**) — the repo's first theory doc and its canonical math
-  home. Graduates SIG1's derivations out of the platform's `activation_splitting_method.md`,
-  **and** absorbs the already-shipped primitives' math (band-pass, sliding-window
-  peak-to-peak, threshold strategies, R-wave anchoring) from `iafdb-pipeline/docs/theory.md`
-  §1.1–1.3 / §2.1. The repo that owns a primitive owns its math.
-- **QRS-calibration default removal** (**B22**) — delete `DEFAULT_TARGET_QRS_PP_MV` and make
-  `target_qrs_pp_mv` required, leaving iafdb-pipeline's CLI config the single source. Breaking;
-  ships alone as **v0.3.0** ahead of SIG1, which lands as **v0.4.0**.
-- **`filters.lowpass`** — zero-phase Butterworth low-pass mirroring `bandpass`. Needed by the
-  Botteron envelope; also what `filters.decimation` would build on.
-- **`filters.decimation`** (**B9**) — **conditional**: anti-alias + downsample, built only if
-  study §8.1's `T` / sample-rate decision needs resampling. If the study doesn't call for it,
-  it drops back to the Backlog at phase cleanup. Pairs with egm-classifier's `run.json`
-  export-config refactor.
-
-> → Tracked at `intracardiac-platform/project/project_plan.md` Phase 1.5 and
-> `intracardiac-platform/phases/phase_1_5/design.md` §3 (SIG1) / §4 (B22, B9).
+Nothing outstanding from this phase.
 
 ## Phase 4 — multi-beat
 

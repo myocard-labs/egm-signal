@@ -1,6 +1,6 @@
 # myocard-egm-signal
 
-> Generic signal-processing primitives for intracardiac EGM data: filters, windowing, threshold strategies, calibration, and Record-Protocol-driven segment extractors.
+> Generic signal-processing primitives for intracardiac EGM data: filters, windowing, threshold strategies, calibration, activation detection, and Record-Protocol-driven segment extractors.
 
 Part of the [myocard-labs](https://github.com/myocard-labs) cardiac signal processing toolkit.
 
@@ -79,12 +79,14 @@ For the keep-below companion (noise extraction), see
 | Module | What's in it |
 |---|---|
 | `myocard_egm_signal.records` | `Record` Protocol — the structural type the extractors consume. |
-| `myocard_egm_signal.filters` | `bandpass` (zero-phase Butterworth). Future: notch, smoothing. |
+| `myocard_egm_signal.exceptions` | `DegenerateSignalError` + `EmptySignalError` + `ConstantSignalError`. |
+| `myocard_egm_signal.filters` | `bandpass` + `lowpass` (zero-phase Butterworth) + `decimate` (anti-alias then downsample). Future: notch, smoothing. |
 | `myocard_egm_signal.windowing` | `sliding_window_peak_to_peak` and future sliding-window primitives. |
-| `myocard_egm_signal.thresholds` | `ThresholdStrategy` + `AbsoluteThreshold` + `PercentileThreshold` + `NoThreshold` — keep-above selection. |
-| `myocard_egm_signal.noise_thresholds` | `NoiseSegmentStrategy` + `AbsoluteQuietThreshold` + `PercentileQuietThreshold` — keep-below selection. |
+| `myocard_egm_signal.thresholds` | Four families: keep-above and keep-below over pooled amplitudes (`ThresholdStrategy` / `NoiseSegmentStrategy` and their strategies), plus `SignalThreshold` and `PositionAwareSignalThreshold` over a 1-D signal. |
 | `myocard_egm_signal.calibration` | `Calibration` + `CalibrationStrategy` + `RWaveAnchoring` + `compute_calibration` + `estimate_qrs_peak_to_peak`. |
-| `myocard_egm_signal.extraction` | `HealthySegment` + `NoiseSegment` + `extract_healthy_segments` + `extract_noise_segments`. |
+| `myocard_egm_signal.extraction` | Fixed-stride: `HealthySegment` + `NoiseSegment` + `extract_healthy_segments` + `extract_noise_segments`. |
+| `myocard_egm_signal.extraction.activation_based` | Activation-anchored: detection curves, the detection chain, complex bounds, and the windowing path (`window_train`, `WindowSet`, the windowers). |
+| `myocard_egm_signal.model` | `fit_temperature` + `apply_temperature` — classifier probability calibration. |
 
 ---
 
@@ -107,8 +109,9 @@ CI runs the same checks on Python 3.10, 3.11, and 3.12 — see `.github/workflow
 Pre-1.0; expect breaking changes across minor versions until the API stabilizes.
 
 - For end-user usage examples + a "define your own threshold strategy" walkthrough, see [`docs/usage.md`](docs/usage.md).
-- For design rationale (why Protocols, why two parallel threshold hierarchies, why `preferred_leads` is a kwarg), see [`project/architecture.md`](project/architecture.md).
-- For the v0.2.0+ plan, see [`project/roadmap.md`](project/roadmap.md).
+- For the math — every operator's discrete form, why it is defined that way, and a linked primary source per technique — see [`docs/theory.md`](docs/theory.md).
+- For design rationale (Protocol versus ABC, why four threshold families, why `preferred_leads` is a kwarg), see [`project/architecture.md`](project/architecture.md).
+- For what is planned but not yet built, see [`project/roadmap.md`](project/roadmap.md).
 - For the broader refactor context, see `intracardiac-platform/project/project_plan.md`.
 
 ---
