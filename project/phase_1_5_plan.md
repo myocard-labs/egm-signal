@@ -2,7 +2,7 @@
 
 **Repo:** egm-signal · **Phase:** 1.5
 **Phase design doc:** `intracardiac-platform/phases/phase_1_5/design.md`
-**Status:** in progress · **Progress:** 9/13 steps done (S0 ✅ · S1 ✅ · S2 ✅ · S3 ✅ · S4 ✅ · S5 ✅ · S6 ✅ · S6b ✅ · S6c ✅)
+**Status:** in progress · **Progress:** 10/13 steps done (S0 ✅ · S1 ✅ · S2 ✅ · S3 ✅ · S4 ✅ · S5 ✅ · S6 ✅ · S6b ✅ · S6c ✅ · S7 ✅)
 
 **Release model (corrected 2026-08-01, Daniel).** Supersedes S0's "ships alone as v0.3.0 ahead of
 SIG1": egm-signal appears **once** in the Wave-1 order, so **all** of this plan's code lands before a
@@ -596,7 +596,7 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   the spec notes later multi-beat work will *want* some edge-clipped windows. The practical fallback
   (fixed generous asymmetric margins when boundaries can't be measured on real AF) is documented.
 
-### S6 — Anchor-window kernel + predicates ☑ (1–2 h) — **re-scoped 2026-08-05 (CL-125)**
+### S6 — Anchor-window kernel + predicates ✅ (1–2 h) — **re-scoped 2026-08-05 (CL-125)**
 > **What this step is now.** S6 shipped the **single-anchor kernel**. The design has since moved the
 > per-anchor *loop*, the `PositionRange` type and its *draw* into this repo (CL-125), so the
 > caller-facing primitive is **S6b**'s `window_train`. S6's functions stay as the kernel it is built
@@ -661,7 +661,7 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   3. *The real gap — no train, no `𝒫`, no selection algorithm.* Escalated as **CL-125** (scope) and
      **CL-126** (a measurement). Both resolved 2026-08-05 → **S6b**.
 
-### S6b — `window_train` + `PositionRange` ☑ (3–5 h) — **new 2026-08-05 (CL-125 · CL-126 · CL-127)**
+### S6b — `window_train` + `PositionRange` ✅ (3–5 h) — **new 2026-08-05 (CL-125 · CL-126 · CL-127)**
 
 > **Why this step exists.** S6 implemented design §3's SIG1 row as it stood, which named only the
 > single-anchor helper. Reviewing it surfaced that the *selection algorithm* — loop the train, draw
@@ -785,7 +785,7 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   `(source, WindowSet)` pairs and pool last, or not pool at all. Deliberately **no source-identity
   field here** — inventing one would be guessing at a provenance scheme the producer owns.
 
-### S6c — `ActivationWindower` ☑ (1.5–3 h) — **new 2026-08-06 (Daniel's S6b review)**
+### S6c — `ActivationWindower` ✅ (1.5–3 h) — **new 2026-08-06 (Daniel's S6b review)**
 - **Change:** `extraction/activation_based/windowers.py` — `ActivationWindower` ABC holding the
   position generator and `T`, with `window(signal) -> WindowSet` as a template method and `_detect`
   as the single abstract step; `SingleActivationWindower` (argmax of the detection curve) and
@@ -816,7 +816,7 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   could not — four names imported in tests but missing from `__all__`, which `attr-defined` flagged
   while the runtime import worked fine.
 
-### S7 — Package wiring + usage docs ☐ (1–2 h)
+### S7 — Package wiring + usage docs ✅ (1–2 h)
 - **Change:** `extraction/activation_based/__init__.py` re-exports; `extraction/__init__.py` and the
   top-level `__init__.py` re-export the public names; a new `docs/usage.md` section covering the
   detect → bound → anchor flow end to end — call signatures, argument meanings, and a runnable
@@ -825,6 +825,23 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
 - **Verify:** a doctest-style example in `docs/usage.md` runs end to end on a synthetic record;
   `from myocard_egm_signal import ...` resolves every new public name; `mypy src` clean.
 - **Depends on:** S4, S5, S6.
+- **Done 2026-08-06.** All 26 `activation_based` names plus the three exceptions re-export from
+  `extraction/__init__.py` and the package root (62 top-level exports; every one verified to resolve).
+  New `docs/usage.md` section — the one-call windower path, the classify-then-filter idiom, pooling,
+  choosing positions, the lower-level `window_train`, complex bounds, and the degenerate-signal
+  handling. Math stays in `theory.md`, linked once at the end. Module map gained the
+  `activation_based` and `exceptions` rows and a corrected `thresholds` row (four families, not two).
+- **Verifying the doc found a real inconsistency in committed S4 code.** The plan asks for a runnable
+  example, so I extracted every python block from the new section and executed them in one shared
+  namespace, as a reader following top to bottom. The dead-channel block failed: `detect_activation`
+  raised a **bare `ValueError`** where every other path raises `ConstantSignalError`. It is the one
+  function in the chain with no threshold in front of it, so a sweep catching the specific exception
+  would have crashed on a flat channel *only when using the single-activation windower* — precisely
+  the case the doc was telling people to write. Now raises `ConstantSignalError` / `EmptySignalError`
+  like everything else, with a test asserting **both** windowers agree on a dead channel. 252 tests.
+- **Doc examples are executed, not eyeballed.** Worth keeping as the S9 exit check: the 8 blocks run
+  against a synthetic record and the last one is deliberately fed a flat channel to exercise the
+  `except` path it demonstrates.
 
 ### S7a — `docs/theory.md` — the repo's canonical math home 🔨 (2.5–5 h) — **now incremental**
 - **Restructured 2026-08-01 (Daniel):** the theory doc is written **as the math lands**, not in one
