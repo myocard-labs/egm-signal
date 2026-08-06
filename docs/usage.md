@@ -161,6 +161,28 @@ segs = extract_healthy_segments(
 
 The noise-side analog satisfies `NoiseSegmentStrategy` with the same signature — same Protocol shape, distinct name to make the direction visible at call sites.
 
+### Lower the sampling rate
+
+Decimation drops the rate by an integer factor. It low-passes first, which is not an optimisation you can skip: without it, everything above the *new* Nyquist folds back into the retained band and lands on top of real signal, permanently. At 1 kHz decimated by 4, a 200 Hz component reappears at 50 Hz — inside the atrial band, and indistinguishable from genuine 50 Hz content once it arrives.
+
+```python
+from myocard_egm_signal import decimate
+
+# 1000 Hz -> 250 Hz. Works on 1-D or 2-D (per channel, along axis 0).
+downsampled = decimate(my_signal, factor=4)
+new_fs = 1000.0 / 4
+```
+
+**The returned array does not carry its new rate**, so every rate-dependent value downstream has to be recomputed: filter cutoffs in Hz, refractory intervals in samples, window lengths in samples. A stale `fs` after decimation fails silently and plausibly, which is the worst way for it to fail.
+
+The anti-alias filter is deliberately zero-phase. A causal filter would delay the whole trace by its group delay and shift every activation time with it — and activation timing is what the rest of this library is built on. The defaults (order 4, cutoff at 0.8 of the new Nyquist) are filter-design values chosen by measurement; see [`theory.md`](theory.md) §1.4 for the numbers behind them. Raise `order` for more rejection at the cost of a narrower usable band:
+
+```python
+aggressive = decimate(my_signal, factor=4, order=8)
+```
+
+`factor=1` returns the signal unchanged without filtering — there is no aliasing to prevent, so filtering would only distort it. Very short traces are rejected rather than silently mangled, since the zero-phase filter pads each end and needs something to pad from: 16 samples at the default order, 10 at order 2.
+
 ### Cut a record into activation-anchored windows
 
 The segment extractors above cut a record at a fixed stride. This cuts it **relative to the activations it contains**: find where the tissue activates, then place a fixed-length window at a chosen position relative to each activation. That position is varied deliberately, so a downstream model cannot learn "the interesting part is always in the middle" instead of learning morphology.
@@ -395,7 +417,7 @@ If your producer doesn't have QRS annotations, use a different calibration strat
 | Module | What's in it |
 |---|---|
 | `myocard_egm_signal.records` | `Record` Protocol — the structural type the extractors consume. |
-| `myocard_egm_signal.filters` | `bandpass` + `lowpass` (zero-phase Butterworth). Subpackage; future: notch, smoothing, decimation. |
+| `myocard_egm_signal.filters` | `bandpass` + `lowpass` (zero-phase Butterworth) + `decimate` (anti-alias then downsample). Subpackage; future: notch, smoothing. |
 | `myocard_egm_signal.windowing` | `sliding_window_peak_to_peak` and future sliding-window primitives. |
 | `myocard_egm_signal.thresholds` | Four threshold families: keep-above over pooled amplitudes (`ThresholdStrategy` + Absolute/Percentile/None), keep-below over the same (`NoiseSegmentStrategy` + AbsoluteQuiet/PercentileQuiet), and two over a 1-D signal — `SignalThreshold` (`MedianMadThreshold`, `PercentileSignalThreshold`) reading the whole array, and `PositionAwareSignalThreshold` (`PeakFractionThreshold`) reading it at a given sample. |
 | `myocard_egm_signal.exceptions` | `DegenerateSignalError` and its two causes — `EmptySignalError` (a caller bug) and `ConstantSignalError` (a dead or rail-clipped channel). |

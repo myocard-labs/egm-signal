@@ -37,6 +37,7 @@ sentinel conventions) see
   - [1.1 Zero-phase filtering](#11-zero-phase-filtering)
   - [1.2 Band-pass](#12-band-pass)
   - [1.3 Low-pass](#13-low-pass)
+  - [1.4 Decimation](#14-decimation)
 - [2. Detection preprocessing](#2-detection-preprocessing)
   - [2.1 Rectified derivative](#21-rectified-derivative)
   - [2.2 Teager–Kaiser energy](#22-teagerkaiser-energy)
@@ -91,6 +92,9 @@ Every symbol used anywhere below, grouped by where it appears.
   describe the degenerate band-pass we *reject* in §1.3.
 - <a id="sym-filters"></a>$\mathrm{BP}_{40\text{–}250}$, $\mathrm{LP}_{20}$ — a band-pass and a
   low-pass, subscripted with their cutoffs in Hz.
+- <a id="sym-M"></a>$M$ — the integer decimation factor (§1.4); the rate becomes
+  $f_s/M$ and $\alpha$ is the anti-alias cutoff as a fraction of the new
+  Nyquist.
 
 **Detection preprocessing (§2)**
 
@@ -266,6 +270,82 @@ and offset later (§4).
 > **Pinned by** `tests/test_filters.py::test_lowpass_bridges_a_fractionated_complex`
 > (three deflections → exactly one above-threshold run; the raw rectified
 > signal fragments).
+
+### 1.4 Decimation
+
+Keeping every $M$-th sample lowers the rate to $f_s/M$ and the Nyquist
+frequency to $f_s/2M$. Anything above that new limit does not disappear:
+it **folds back** into the retained band. A component at frequency $f$
+reappears at
+
+$$
+f_\text{alias} = \min_{k \in \mathbb{Z}} \left| f - k\,\frac{f_s}{M} \right| ,
+$$
+
+and once it lands there it is indistinguishable from signal that was
+genuinely at $f_\text{alias}$ — no later processing can separate them.
+At $f_s = 1000$ and $M = 4$, a 200 Hz component reappears at
+$|200 - 250| = 50$ Hz, inside the band the atrial signal occupies. So
+the anti-alias low-pass is not preparation for decimation; it is half of
+what decimation *is*.
+
+**Where to put the cutoff.** Filtering exactly at the new Nyquist is not
+enough, because a Butterworth is only $-3$ dB down at its own corner and
+its whole transition band would fold. The cutoff is therefore set to a
+fraction of the new limit,
+
+$$
+f_c = \alpha \cdot \frac{f_s}{2M}, \qquad \alpha = 0.8 ,
+$$
+
+which puts the transition inside the discarded region. The same fraction
+`scipy.signal.decimate` uses.
+
+**Why order 4 rather than the order 2 used elsewhere.** Measured at
+$f_s = 1000$, $M = 4$, $\alpha = 0.8$ — the amplitude an out-of-band
+200 Hz tone retains in the decimated result, and the amplitude a 50 Hz
+tone keeps:
+
+| $N$ | 200 Hz leak | 50 Hz retained | 110 Hz retained |
+|---|---|---|---|
+| 2 | 0.0385 | 0.947 | 0.399 |
+| **4** | **0.0017** | **0.997** | 0.306 |
+| 8 | 0.0002 | 1.000 | 0.162 |
+
+Order 4 buys a factor of 23 in rejection over order 2 for 0.2% of
+passband. Order 8 gains another factor of ten but collapses the
+transition band, taking legitimate content near the edge with it, so 4
+is the balance point. Recall from §1.1 that the filter is applied
+forward and backward, so the achieved roll-off is that of a one-pass
+filter of order $2N$.
+
+**Zero-phase, which is not the usual choice for a resampler.** A causal
+anti-alias filter delays the signal by its group delay, shifting every
+event in the trace. Here the quantity everything downstream is built on
+is *when* an activation occurs (§3, §5), so a uniform shift would move
+every detected activation time and flow directly into the stored
+activation position. Zero-phase costs nothing in an offline pipeline and
+keeps the timing exact.
+
+**A practical caution.** The forward-backward padding leaves a transient
+at each end that has nothing to do with the passband. Measured on an
+out-of-band tone at order 4: the largest excursion anywhere in the
+result is $0.059$, while the steady-state leak is $0.0015$ — a factor of
+39. Any assessment of filter quality that takes a maximum over the whole
+array is therefore measuring the padding, and will rate every order
+alike. Trim the edges before measuring, or measure spectrally.
+
+> **Implementation** — `filters/decimation.py`; reuses §1.3's low-pass,
+> passing $f_s = 1$ so the cutoff is expressed purely as a function of
+> $M$ and the caller cannot supply a rate inconsistent with the data.
+> **Pinned by** `tests/test_decimation.py`, which compares against naive
+> `signal[::M]` to show the 50 Hz alias appearing only without the
+> filter.
+
+**Sources.** The sampling theorem and the folding relation are standard;
+see Oppenheim & Schafer, *Discrete-Time Signal Processing*, on sampling
+rate reduction, and Crochiere & Rabiner, *Multirate Digital Signal
+Processing* (1983), for decimation specifically.
 
 ## 2. Detection preprocessing
 

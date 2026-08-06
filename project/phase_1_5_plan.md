@@ -2,7 +2,7 @@
 
 **Repo:** egm-signal · **Phase:** 1.5
 **Phase design doc:** `intracardiac-platform/phases/phase_1_5/design.md`
-**Status:** in progress · **Progress:** 10/13 steps done (S0 ✅ · S1 ✅ · S2 ✅ · S3 ✅ · S4 ✅ · S5 ✅ · S6 ✅ · S6b ✅ · S6c ✅ · S7 ✅)
+**Status:** in progress · **Progress:** 11/13 steps done (S0 ✅ · S1 ✅ · S2 ✅ · S3 ✅ · S4 ✅ · S5 ✅ · S6 ✅ · S6b ✅ · S6c ✅ · S7 ✅ · S8 ✅)
 
 **Release model (corrected 2026-08-01, Daniel).** Supersedes S0's "ships alone as v0.3.0 ahead of
 SIG1": egm-signal appears **once** in the Wave-1 order, so **all** of this plan's code lands before a
@@ -912,13 +912,43 @@ and states its verification. ☐ todo · 🔨 wip · ✅ done
   fractal math, which is why that doc runs to 950 lines and this one shouldn't.
 - **Depends on:** S1–S6 (documents as-built), S7.
 
-### S8 — `filters.decimation` (B9) ☐ (0.5–1.5 h) — **conditional**
+### S8 — `filters.decimation` (B9) ✅ (0.5–1.5 h) — ~~conditional~~ **built unconditionally 2026-08-06**
 - **Change:** `filters/decimation.py` — anti-alias low-pass + integer-factor downsample, reusing S1's
   `lowpass`. **Only build this if §8.1 concludes the `T`/rate decision needs resampling**; otherwise
   delete this step and leave B9 in `roadmap.md`.
 - **Verify:** unit tests — output length is `ceil(n/factor)`; a tone above the new Nyquist is
   attenuated rather than aliased down; a tone below it survives.
-- **Depends on:** S1, and the §8.1 outcome.
+- **Depends on:** ~~S1, and the §8.1 outcome.~~ S1 only.
+- **Condition dropped (Daniel, 2026-08-06).** The gate was "only build this if §8.1 concludes the
+  rate decision needs resampling" — but §8.1 cannot be run without the primitive being available to
+  try, and the step is small. Built now rather than blocking a study on it.
+- **Done 2026-08-06.** `filters/decimation.py` — `decimate(signal, factor, order, cutoff_fraction)`
+  plus `minimum_length_samples`. 18 tests, 270 total, gate green. Theory §1.4 + usage section written.
+- **Defaults chosen by measurement, not convention.** At `fs=1000`, `M=4`, cutoff `0.8 * new_nyquist`,
+  the amplitude an out-of-band 200 Hz tone retains: order 2 → **0.0385**, order 4 → **0.0017**,
+  order 8 → 0.0002; passband (50 Hz) 0.947 / 0.997 / 1.000. **Order 4** buys 23× the rejection of
+  order 2 for 0.2% of passband, where order 8 gains another 10× but collapses the transition band
+  (110 Hz retention falls 0.31 → 0.16). The 0.8 cutoff fraction matches `scipy.signal.decimate`.
+- **These defaults do not violate the library-defaults rule.** They are *filter-design* values —
+  they describe how faithfully the function resamples — not policy about the data, which is what the
+  rule targets. `lowpass`/`bandpass` already ship `order=2` on the same basis. Recorded at the
+  constants so the distinction is not re-litigated.
+- **Zero-phase, deliberately unusual for a resampler.** A causal anti-alias filter would delay the
+  trace by its group delay, shifting every detected activation time and flowing straight into the
+  stored activation position. Zero-phase costs nothing offline. Pinned by a test asserting a
+  symmetric pulse's peak does not move by more than one output sample.
+- **`fs` is not passed in, and that is the point.** The cutoff is a pure function of the factor
+  (`α / 2M` with the rate normalised to 1), so the caller cannot supply a rate inconsistent with the
+  data. The flip side — the result carries no record of its new rate — is called out prominently in
+  both the docstring and usage, because a stale `fs` downstream fails silently.
+- **My first two tests measured the wrong thing.** They took `abs(result).max()`, which is dominated
+  by the forward-backward padding transient (0.059) rather than the passband leak (0.0015) — a factor
+  of 39 — so they rated order 2 and order 4 as identical and *hid the very property the default was
+  chosen for*. Corrected to trim the edges before measuring; the trap is documented in theory §1.4
+  and in the test helper, since anyone assessing this filter later will hit it.
+- **Short traces raise instead of surfacing scipy's padlen error.** `minimum_length_samples` derives
+  the limit from the filter order (10 / 16 / 28 samples at order 2 / 4 / 8, verified against measured
+  behaviour) and the message says what to do about it.
 
 ### S9 — Docs + phase-exit ☐ (0.5–1.5 h)
 - **Change:** `project/architecture.md` gains the `extraction/activation_based/` subpackage in the
